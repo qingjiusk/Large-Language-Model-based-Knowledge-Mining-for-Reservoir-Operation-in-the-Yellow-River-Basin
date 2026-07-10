@@ -1,0 +1,97 @@
+{
+  "Reservoir": {
+    "description": "水库",
+    "label": "Reservoir",
+    "properties": {
+      "name": "水库名称",
+      "alias": "别名",
+      "river": "所在河流",
+      "location": "地理位置",
+      "total_capacity": "总库容（亿立方米）",
+      "flood_control_capacity": "防洪库容（亿立方米）",
+      "normal_storage_level": "正常蓄水位（米）",
+      "dead_storage_level": "死水位（米）"
+    }
+  },
+  "HydrologicalStation": {
+    "description": "水文站",
+    "label": "HydrologicalStation",
+    "properties": {
+      "name": "水文站名称",
+      "alias": "别名/简称",
+      "river": "所在河流",
+      "control_area": "控制面积（km²）",
+      "station_type": "干流/支流",
+      "location": "地理位置"
+    }
+  },
+  "WaterResourceZone": {
+    "description": "水资源分区（二级区）",
+    "label": "WaterResourceZone",
+    "properties": {
+      "name": "分区名称",
+      "alias": "简称",
+      "area": "计算面积（万km²）",
+      "level": "分区级别（二级区）",
+      "river_basin": "所属流域"
+    }
+  },
+  "Province": {
+    "description": "省级行政区",
+    "label": "Province",
+    "properties": {
+      "name": "省区名称",
+      "alias": "简称"
+    }
+  },
+  "River": {
+    "description": "河流",
+    "label": "River",
+    "properties": {
+      "name": "河流名称",
+      "length": "河长（km）",
+      "basin_area": "流域面积（万km²）"
+    }
+  },
+  "AnnualHydrologyData": {
+    "description": "年度水文数据",
+    "label": "AnnualHydrologyData",
+    "properties": {
+      "year": "年份",
+      "indicator": "指标类型（降水量/径流量/输沙量/用水量等）",
+      "value": "数值",
+      "unit": "单位",
+      "compare_last_year": "同比变化",
+      "compare_baseline": "与多年平均值比较"
+    }
+  },
+  "DispatchRule": {
+    "description": "水库调度规则",
+    "label": "DispatchRule",
+    "properties": {
+      "name": "规则名称",
+      "content": "规则内容",
+      "applicable_period": "适用时段",
+      "condition": "触发条件"
+    }
+  },
+  "Constraint": {
+    "description": "约束条件",
+    "label": "Constraint",
+    "properties": {
+      "variable": "约束变量",
+      "operator": "运算符",
+      "value": "阈值",
+      "unit": "单位"
+    }
+  },
+  "Document": {
+    "description": "来源文档",
+    "label": "Document",
+    "properties": {
+      "name": "文档名称",
+      "year": "年份",
+      "type": "文档类型（公报/规程/规划）"
+    }
+  }
+}

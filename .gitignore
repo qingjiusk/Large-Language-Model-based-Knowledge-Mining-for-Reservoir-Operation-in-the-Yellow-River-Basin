@@ -1,1 +1,55 @@
+# ====== 外部依赖/参考代码 ======
 /models
+/edc-main
+
+# ====== Python ======
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ====== 虚拟环境 ======
+.env
+.venv/
+venv/
+env/
+
+# ====== IDE / 编辑器 ======
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ====== 测试与缓存 ======
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.coverage
+htmlcov/
+.tox/
+
+# ====== 日志 ======
+*.log
+logs/
+
+# ====== 用户数据 ======
+data/raw/*
+data/processed/texts/*
+data/processed/chunks/*
+data/processed/tables/*
+!data/raw/.gitkeep
+!data/processed/texts/.gitkeep
+!data/processed/chunks/.gitkeep
+!data/processed/tables/.gitkeep
+
+# ====== 操作系统 ======
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ====== Claude / AI 工具 ======
+.claude/plans/

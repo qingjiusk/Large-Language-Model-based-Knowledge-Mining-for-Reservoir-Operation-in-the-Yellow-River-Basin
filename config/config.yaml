@@ -1,0 +1,77 @@
+# ============================================
+# HydroBrain 配置文件
+# 黄河水库调度知识挖掘系统 (DeepSeek API)
+# ============================================
+
+# ---------- DeepSeek API ----------
+deepseek:
+  base_url: "${DEEPSEEK_BASE_URL:https://api.deepseek.com}"
+  api_key: "${DEEPSEEK_API_KEY}"
+  model: "${DEEPSEEK_MODEL:deepseek-chat}"
+  max_tokens: 4096
+  temperature: 0.0
+  max_retries: 3
+  retry_delay: 5
+
+# ---------- 数据路径 ----------
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  texts_dir: "data/processed/texts"
+  chunks_dir: "data/processed/chunks"
+  tables_dir: "data/processed/tables"
+  ontology_dir: "data/ontology"
+
+# ---------- PDF 解析 ----------
+pdf_parser:
+  skip_header_footer: true
+  min_font_size_for_heading: 14
+
+# ---------- 表格解析 ----------
+table_parser:
+  min_table_rows: 2
+  output_format: "markdown"  # markdown / dataframe
+
+# ---------- 文本切片 ----------
+text_splitter:
+  chunk_size: 2000       # tokens
+  chunk_overlap: 200     # tokens
+  separators:
+    - "\n\n"
+    - "\n"
+    - "。"
+    - "."
+    - " "
+
+# ---------- 向量嵌入 ----------
+embedding:
+  model: "all-MiniLM-L6-v2"
+  device: "cpu"
+
+# ---------- Neo4j ----------
+neo4j:
+  uri: "${NEO4J_URI:bolt://localhost:7687}"
+  user: "${NEO4J_USER:neo4j}"
+  password: "${NEO4J_PASSWORD:password}"
+
+# ---------- 本体文件 ----------
+ontology:
+  entity_types: "data/ontology/entity_types.json"
+  relation_types: "data/ontology/relation_types.json"
+  alias_dict: "data/ontology/alias_dict.json"
+
+# ---------- 关系标准化 ----------
+canonicalization:
+  top_k_candidates: 3
+  mode: "strict"  # strict / extended
+  min_similarity_threshold: 0.7
+
+# ---------- 知识融合 ----------
+fusion:
+  table_priority_over_text: true
+  enable_year_based_distinction: true
+
+# ---------- 日志 ----------
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

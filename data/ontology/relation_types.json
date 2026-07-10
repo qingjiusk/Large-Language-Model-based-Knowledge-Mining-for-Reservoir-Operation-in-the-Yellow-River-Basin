@@ -1,0 +1,110 @@
+{
+  "LOCATED_ON": {
+    "description": "[水库/水文站/城市] 位于 [河流] 上",
+    "subject_type": "Reservoir/HydrologicalStation/City",
+    "object_type": "River",
+    "category": "空间关系"
+  },
+  "LOCATED_IN_ZONE": {
+    "description": "[水库/水文站] 属于 [水资源分区]",
+    "subject_type": "Reservoir/HydrologicalStation",
+    "object_type": "WaterResourceZone",
+    "category": "空间关系"
+  },
+  "BELONGS_TO_PROVINCE": {
+    "description": "[水库/水文站] 位于 [省级行政区] 境内",
+    "subject_type": "Reservoir/HydrologicalStation",
+    "object_type": "Province",
+    "category": "行政归属"
+  },
+  "IS_TRIBUTARY_OF": {
+    "description": "[支流] 是 [干流] 的支流",
+    "subject_type": "River",
+    "object_type": "River",
+    "category": "水系关系"
+  },
+  "CONTROLS": {
+    "description": "[水文站] 控制观测 [河流] 某断面",
+    "subject_type": "HydrologicalStation",
+    "object_type": "River",
+    "category": "监测关系"
+  },
+  "HAS_ANNUAL_DATA": {
+    "description": "[水库/水文站/分区] 在某年度有 [年度水文数据]",
+    "subject_type": "Reservoir/HydrologicalStation/WaterResourceZone",
+    "object_type": "AnnualHydrologyData",
+    "category": "数据关联"
+  },
+  "HAS_DISPATCH_RULE": {
+    "description": "[水库] 遵循 [调度规则]",
+    "subject_type": "Reservoir",
+    "object_type": "DispatchRule",
+    "category": "规则关联"
+  },
+  "HAS_CONSTRAINT": {
+    "description": "[水库] 受 [约束条件] 限制",
+    "subject_type": "Reservoir",
+    "object_type": "Constraint",
+    "category": "约束关联"
+  },
+  "FLOOD_CONTROL_LEVEL": {
+    "description": "[水库] 的汛期防洪限制水位为 [水位值]",
+    "subject_type": "Reservoir",
+    "object_type": "水位数值",
+    "category": "水位参数"
+  },
+  "NORMAL_STORAGE_LEVEL": {
+    "description": "[水库] 的正常蓄水位为 [水位值]",
+    "subject_type": "Reservoir",
+    "object_type": "水位数值",
+    "category": "水位参数"
+  },
+  "DEAD_STORAGE_LEVEL": {
+    "description": "[水库] 的死水位为 [水位值]",
+    "subject_type": "Reservoir",
+    "object_type": "水位数值",
+    "category": "水位参数"
+  },
+  "TOTAL_CAPACITY": {
+    "description": "[水库] 的总库容为 [容量值]",
+    "subject_type": "Reservoir",
+    "object_type": "库容数值",
+    "category": "库容参数"
+  },
+  "ANNUAL_RUNOFF": {
+    "description": "[水文站/河流] 在某年实测径流量为 [水量值]",
+    "subject_type": "HydrologicalStation/River",
+    "object_type": "径流量数值",
+    "category": "水文数据"
+  },
+  "ANNUAL_SEDIMENT": {
+    "description": "[水文站/河流] 在某年输沙量为 [输沙量值]",
+    "subject_type": "HydrologicalStation/River",
+    "object_type": "输沙量数值",
+    "category": "水文数据"
+  },
+  "ANNUAL_PRECIPITATION": {
+    "description": "[水资源分区/省区] 在某年降水量为 [降水量值]",
+    "subject_type": "WaterResourceZone/Province",
+    "object_type": "降水量数值",
+    "category": "水文数据"
+  },
+  "WATER_SUPPLY": {
+    "description": "[省区/分区] 在某年供水量为 [供水量值]",
+    "subject_type": "Province/WaterResourceZone",
+    "object_type": "供水量数值",
+    "category": "用水数据"
+  },
+  "WATER_USE": {
+    "description": "[省区/分区] 在某年用水量为 [用水量值]",
+    "subject_type": "Province/WaterResourceZone",
+    "object_type": "用水量数值",
+    "category": "用水数据"
+  },
+  "SOURCE_FROM": {
+    "description": "[知识三元组] 来源自 [文档]",
+    "subject_type": "Triplet",
+    "object_type": "Document",
+    "category": "溯源关系"
+  }
+}
