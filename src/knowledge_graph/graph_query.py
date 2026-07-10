@@ -1,6 +1,8 @@
 """
 知识图谱查询封装
 常用业务查询的 Cypher 模板
+注意事项：关系类型由 LLM 抽取，是动态的中文/英文关系名，
+          查询时不硬编码关系类型，而是通过节点标签来定位。
 """
 from typing import Any, Dict, List, Optional
 
@@ -14,12 +16,6 @@ class GraphQuery:
     """图谱查询封装，提供常用业务查询接口"""
 
     def __init__(self, neo4j_client: Neo4jClient):
-        """
-        初始化查询封装
-
-        Args:
-            neo4j_client: Neo4jClient 实例
-        """
         self.neo4j = neo4j_client
 
     # ==================== 水库查询 ====================
@@ -29,7 +25,7 @@ class GraphQuery:
         query = """
         MATCH (r:Reservoir {id: $id})
         OPTIONAL MATCH (r)-[rel]->(n)
-        RETURN r, collect({type: type(rel), target: n, props: properties(rel)}) AS relations
+        RETURN r, collect({type: type(rel), target: labels(n), props: properties(n)}) AS relations
         """
         return self.neo4j.execute_read_single(query, {"id": reservoir_id})
 
@@ -44,18 +40,18 @@ class GraphQuery:
         return self.neo4j.execute_read(query, {"keyword": keyword, "limit": limit})
 
     def get_reservoir_rules(self, reservoir_id: str) -> List[Dict]:
-        """查询水库的调度规则"""
+        """查询水库的调度规则（匹配目标为 DispatchRule 的关联）"""
         query = """
-        MATCH (r:Reservoir {id: $id})-[rel:HAS_DISPATCH_RULE]->(rule:DispatchRule)
-        RETURN rule, rel.confidence AS confidence, rel.source_doc AS source
+        MATCH (r:Reservoir {id: $id})-[rel]->(rule:DispatchRule)
+        RETURN rule, type(rel) AS relation, rel.confidence AS confidence, rel.source_doc AS source
         """
         return self.neo4j.execute_read(query, {"id": reservoir_id})
 
     def get_reservoir_constraints(self, reservoir_id: str) -> List[Dict]:
-        """查询水库的约束条件"""
+        """查询水库的约束条件（匹配目标为 Constraint 的关联）"""
         query = """
-        MATCH (r:Reservoir {id: $id})-[rel:HAS_CONSTRAINT]->(c:Constraint)
-        RETURN c, rel.confidence AS confidence, rel.source_doc AS source
+        MATCH (r:Reservoir {id: $id})-[rel]->(c:Constraint)
+        RETURN c, type(rel) AS relation, rel.confidence AS confidence, rel.source_doc AS source
         """
         return self.neo4j.execute_read(query, {"id": reservoir_id})
 
@@ -77,7 +73,7 @@ class GraphQuery:
         year: Optional[int] = None,
         indicator: Optional[str] = None,
     ) -> List[Dict]:
-        """查询水文站的年度数据"""
+        """查询水文站的年度数据（匹配目标为 AnnualHydrologyData 的关联）"""
         conditions = ["s.id = $station_id"]
         params: Dict = {"station_id": station_id}
 
@@ -91,9 +87,9 @@ class GraphQuery:
         where_clause = " AND ".join(conditions)
 
         query = f"""
-        MATCH (s:HydrologicalStation {{id: $station_id}})-[:HAS_ANNUAL_DATA]->(d:AnnualHydrologyData)
+        MATCH (s:HydrologicalStation {{id: $station_id}})-[rel]->(d:AnnualHydrologyData)
         WHERE {where_clause}
-        RETURN d, s.name AS station_name
+        RETURN d, type(rel) AS relation, s.name AS station_name
         ORDER BY d.year DESC
         LIMIT 100
         """
@@ -104,7 +100,7 @@ class GraphQuery:
         zone_id: Optional[str] = None,
         year: Optional[int] = None,
     ) -> List[Dict]:
-        """查询水资源分区的年度数据"""
+        """查询水资源分区的年度数据（匹配目标为 AnnualHydrologyData 的关联）"""
         params: Dict = {}
         zone_filter = ""
         if zone_id:
@@ -117,10 +113,10 @@ class GraphQuery:
             params["year"] = year
 
         query = f"""
-        MATCH (z:WaterResourceZone)-[:HAS_ANNUAL_DATA]->(d:AnnualHydrologyData)
+        MATCH (z:WaterResourceZone)-[rel]->(d:AnnualHydrologyData)
         {zone_filter}
         {year_filter}
-        RETURN z.name AS zone_name, d
+        RETURN z.name AS zone_name, d, type(rel) AS relation
         ORDER BY d.year DESC
         LIMIT 100
         """
@@ -134,17 +130,7 @@ class GraphQuery:
         to_id: str,
         max_depth: int = 4,
     ) -> List[Dict]:
-        """
-        查询两个实体之间的最短路径
-
-        Args:
-            from_id: 起始实体 ID
-            to_id: 目标实体 ID
-            max_depth: 最大跳数
-
-        Returns:
-            路径列表
-        """
+        """查询两个实体之间的最短路径"""
         query = """
         MATCH path = shortestPath(
             (a {id: $from_id})-[*1..$max_depth]-(b {id: $to_id})
@@ -162,16 +148,7 @@ class GraphQuery:
     # ==================== 溯源查询 ====================
 
     def trace_by_document(self, doc_name: str, limit: int = 100) -> List[Dict]:
-        """
-        按来源文档查询所有相关知识
-
-        Args:
-            doc_name: 文档名称
-            limit: 最大返回数
-
-        Returns:
-            三元组列表
-        """
+        """按来源文档查询所有相关知识"""
         query = """
         MATCH (a)-[r]->(b)
         WHERE r.source_doc = $doc_name
@@ -190,21 +167,11 @@ class GraphQuery:
         keyword: str,
         limit: int = 50,
     ) -> List[Dict]:
-        """
-        关键词搜索三元组（在 subject/relation/object 中搜索）
-
-        Args:
-            keyword: 搜索关键词
-            limit: 最大返回数
-
-        Returns:
-            匹配的三元组列表
-        """
+        """关键词搜索三元组（在主体/关系/客体名中搜索）"""
         query = """
         MATCH (a)-[r]->(b)
         WHERE a.name CONTAINS $keyword
            OR b.name CONTAINS $keyword
-           OR type(r) CONTAINS $keyword
         RETURN a.name AS subject, labels(a) AS subject_type,
                type(r) AS relation,
                b.name AS object, labels(b) AS object_type,
@@ -229,7 +196,9 @@ class GraphQuery:
         """获取所有水库列表"""
         query = """
         MATCH (r:Reservoir)
-        RETURN r.name AS name, r.id AS id, r.river AS river
+        OPTIONAL MATCH (r)-[rel]->(n)
+        WHERE n:River OR n:HydrologicalStation
+        RETURN r.name AS name, r.id AS id
         ORDER BY r.name
         LIMIT $limit
         """

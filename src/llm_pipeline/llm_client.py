@@ -146,7 +146,11 @@ class DeepSeekClient:
         """
         从混合文本中提取 JSON 数组或对象
         """
+        if not text:
+            return []
         text = text.strip()
+        if not text:
+            return []
 
         # 尝试直接解析
         try:

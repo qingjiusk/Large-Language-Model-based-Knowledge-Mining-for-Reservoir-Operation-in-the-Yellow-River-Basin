@@ -58,6 +58,10 @@ class GraphBuilder:
         self.entity_linker = entity_linker or EntityLinker()
         self.conflict_resolver = conflict_resolver or ConflictResolver()
 
+        # 从 entity_linker 获取别名反向索引，用于实体类型推测
+        self._known_entities: Dict[str, str] = {}  # name → label
+        self._build_entity_type_cache()
+
         self.stats = {
             "nodes_created": 0,
             "relationships_created": 0,
@@ -65,6 +69,32 @@ class GraphBuilder:
             "triplets_processed": 0,
             "triplets_skipped": 0,
         }
+
+    def _build_entity_type_cache(self):
+        """从别名字典和实体类型定义中预构建实体→类型映射"""
+        # 从别名字典推测类型
+        category_to_label = {
+            "reservoirs": "Reservoir",
+            "hydrological_stations": "HydrologicalStation",
+            "water_resource_zones": "WaterResourceZone",
+            "provinces": "Province",
+            "rivers": "River",
+        }
+        alias_dict = getattr(self.entity_linker, "alias_dict", {})
+        for category, label in category_to_label.items():
+            for std_name, aliases in alias_dict.get(category, {}).items():
+                self._known_entities[std_name] = label
+                for alias in aliases:
+                    self._known_entities[alias] = label
+
+        # 从 entity_types.json 补充
+        entity_types = getattr(self.entity_linker, "entity_types", {})
+        for type_name, info in entity_types.items():
+            label = info.get("label", type_name)
+            # 将 type_name 映射为可能出现在文本中的关键词
+            self._known_entities[type_name] = label
+
+        logger.debug(f"实体类型缓存: {len(self._known_entities)} 条")
 
     def build_from_triplets(
         self,
@@ -207,23 +237,31 @@ class GraphBuilder:
         return (subj_label, obj_label)
 
     def _guess_label_by_name(self, name: str) -> str:
-        """根据实体名称推测节点类型"""
-        name_lower = name.lower()
+        """根据实体名称推测节点类型（优先使用已知实体缓存）"""
+        name_str = name.strip()
 
-        if any(kw in name for kw in ["水库", "水电站", "水利枢纽"]):
+        # Step 0: 查预构建的已知实体缓存
+        if name_str in self._known_entities:
+            return self._known_entities[name_str]
+        for known_name, label in self._known_entities.items():
+            if known_name in name_str or name_str in known_name:
+                return label
+
+        # Step 1: 名称关键词匹配
+        if any(kw in name_str for kw in ["水库", "水电站", "水利枢纽"]):
             return "Reservoir"
-        if any(kw in name for kw in ["水文站", "水文"]):
+        if any(kw in name_str for kw in ["水文站", "水文"]):
             return "HydrologicalStation"
-        if any(kw in name for kw in ["省", "自治区", "直辖市"]):
+        if any(kw in name_str for kw in ["省", "自治区", "直辖市"]):
             return "Province"
-        if any(kw in name for kw in ["河", "江", "水系", "流域"]):
+        if any(kw in name_str for kw in ["河", "江", "水系", "流域"]):
             return "River"
-        if any(kw in name for kw in ["区", "区间"]):
+        if any(kw in name_str for kw in ["区", "区间"]):
             return "WaterResourceZone"
-        if any(kw in name for kw in ["水位", "库容", "径流量", "输沙量", "降水量",
-                                        "亿立方米", "米", "mm", "吨"]):
+        if any(kw in name_str for kw in ["水位", "库容", "径流量", "输沙量", "降水量",
+                                           "亿立方米", "米", "mm", "吨", "%"]):
             return "AnnualHydrologyData"
-        if any(kw in name for kw in ["规则", "规程", "调度", "方案"]):
+        if any(kw in name_str for kw in ["规则", "规程", "调度", "方案"]):
             return "DispatchRule"
 
         # 默认

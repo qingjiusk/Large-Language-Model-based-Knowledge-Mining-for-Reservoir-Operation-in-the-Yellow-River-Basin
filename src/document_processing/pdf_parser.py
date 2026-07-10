@@ -1,7 +1,8 @@
 """
 PDF 文档文本解析器
-基于 PyMuPDF (fitz)，支持单文件与批量解析，自动过滤页眉页脚
+基于 PyMuPDF (fitz) + Tesseract OCR，支持文本型/扫描型 PDF
 """
+import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -13,7 +14,7 @@ logger = get_logger(__name__)
 
 
 class PDFParser:
-    """PDF 文本解析器，将 PDF 转为结构化纯文本"""
+    """PDF 文本解析器，支持文本型 PDF 直接提取和扫描型 PDF OCR 回退"""
 
     def __init__(
         self,
@@ -21,6 +22,9 @@ class PDFParser:
         header_lines: int = 1,
         footer_lines: int = 1,
         min_font_size_for_heading: float = 14.0,
+        use_ocr: bool = True,
+        ocr_lang: str = "chi_sim+eng",
+        ocr_dpi: int = 300,
     ):
         """
         初始化解析器
@@ -30,11 +34,20 @@ class PDFParser:
             header_lines: 页眉行数（从顶部算）
             footer_lines: 页脚行数（从底部算）
             min_font_size_for_heading: 识别为标题的最小字号（暂未实现）
+            use_ocr: 是否为扫描型 PDF 启用 OCR 回退
+            ocr_lang: Tesseract OCR 语言（默认 简体中文+英文）
+            ocr_dpi: OCR 渲染 DPI（越高越清晰但越慢）
         """
         self.skip_header_footer = skip_header_footer
         self.header_lines = header_lines
         self.footer_lines = footer_lines
         self.min_font_size_for_heading = min_font_size_for_heading
+        self.use_ocr = use_ocr
+        self.ocr_lang = ocr_lang
+        self.ocr_dpi = ocr_dpi
+
+        # 延迟加载标记
+        self._is_scanned = None
 
     def extract_text(self, pdf_path: str) -> str:
         """
@@ -46,45 +59,8 @@ class PDFParser:
         Returns:
             全文文本（页间以双换行分隔）
         """
-        pdf_path = Path(pdf_path)
-        if not pdf_path.exists():
-            raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
-
-        try:
-            doc = fitz.open(str(pdf_path))
-        except Exception as e:
-            logger.error(f"无法打开 PDF: {pdf_path}, 错误: {e}")
-            raise RuntimeError(f"PDF 文件无法打开，可能已损坏或加密: {pdf_path}") from e
-
-        page_texts = []
-        for page_num, page in enumerate(doc, start=1):
-            text = page.get_text("text")
-            if not text or not text.strip():
-                continue
-
-            if self.skip_header_footer:
-                lines = text.strip().split("\n")
-                if len(lines) > self.header_lines + self.footer_lines + 1:
-                    h = self.header_lines
-                    f = -self.footer_lines if self.footer_lines > 0 else None
-                    text = "\n".join(lines[h:f])
-                elif len(lines) <= 3:
-                    # 短页面保留全部
-                    pass
-
-            page_texts.append(text)
-
-        doc.close()
-        full_text = "\n\n".join(page_texts)
-
-        stats = {
-            "path": str(pdf_path),
-            "pages": len(page_texts),
-            "chars": len(full_text),
-            "lines": full_text.count("\n") + 1,
-        }
-        logger.info(f"PDF 解析完成: {stats}")
-        return full_text
+        result = self.extract_text_with_meta(pdf_path)
+        return result["full_text"]
 
     def extract_text_with_meta(self, pdf_path: str) -> Dict:
         """
@@ -95,7 +71,8 @@ class PDFParser:
                 "file_name": str,
                 "file_path": str,
                 "page_count": int,
-                "pages": [{"page_num": int, "text": str}, ...],
+                "is_scanned": bool,
+                "pages": [{"page_num": int, "text": str, "method": "native"|"ocr"}, ...],
                 "full_text": str
             }
         """
@@ -108,10 +85,23 @@ class PDFParser:
         except Exception as e:
             raise RuntimeError(f"PDF 文件无法打开: {pdf_path}") from e
 
+        # 检测是否为扫描版（检查前 3 页）
+        self._detect_scanned(doc)
+
         pages = []
         for page_num, page in enumerate(doc, start=1):
             raw_text = page.get_text("text")
             text = raw_text.strip() if raw_text else ""
+
+            if text:
+                method = "native"
+            elif self.use_ocr:
+                # 扫描页 — 用 OCR
+                logger.debug(f"第 {page_num} 页无嵌入文字，启用 OCR...")
+                text = self._ocr_page(pdf_path, page_num)
+                method = "ocr"
+            else:
+                method = "none"
 
             if self.skip_header_footer and text:
                 lines = text.split("\n")
@@ -120,7 +110,7 @@ class PDFParser:
                     f = -self.footer_lines if self.footer_lines > 0 else None
                     text = "\n".join(lines[h:f])
 
-            pages.append({"page_num": page_num, "text": text})
+            pages.append({"page_num": page_num, "text": text, "method": method})
 
         doc.close()
 
@@ -128,12 +118,60 @@ class PDFParser:
             "file_name": pdf_path.name,
             "file_path": str(pdf_path.absolute()),
             "page_count": len(pages),
+            "is_scanned": self._is_scanned,
             "pages": pages,
             "full_text": "\n\n".join(p["text"] for p in pages),
         }
 
-        logger.info(f"PDF 解析完成（带元信息）: {pdf_path.name}, {len(pages)} 页")
+        ocr_pages = sum(1 for p in pages if p["method"] == "ocr")
+        logger.info(
+            f"PDF 解析完成: {pdf_path.name}, {len(pages)} 页 "
+            f"(native: {len(pages) - ocr_pages}, ocr: {ocr_pages})"
+        )
         return result
+
+    def _detect_scanned(self, doc: fitz.Document):
+        """检测 PDF 是否为扫描版（前 3 页无文字 = 扫描版）"""
+        check_pages = min(3, len(doc))
+        total_chars = 0
+        for i in range(check_pages):
+            total_chars += len(doc[i].get_text("text").strip())
+
+        self._is_scanned = total_chars == 0
+        if self._is_scanned:
+            logger.info("检测到扫描型 PDF，将使用 OCR 回退")
+
+    def _ocr_page(self, pdf_path: Path, page_num: int) -> str:
+        """
+        对单页 PDF 执行 OCR
+
+        使用 PyMuPDF 直接渲染页面为图像，再用 pytesseract 识别文字
+        不需要额外安装 poppler
+        """
+        try:
+            import pytesseract
+            from PIL import Image
+            import io
+
+            # 重新打开文档获取该页（避免与主循环的 doc 冲突）
+            doc = fitz.open(str(pdf_path))
+            page = doc[page_num - 1]
+
+            # 渲染为高分辨率图像
+            zoom = self.ocr_dpi / 72  # 72 DPI 为基准
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
+            doc.close()
+
+            # 转为 PIL Image
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+
+            text = pytesseract.image_to_string(img, lang=self.ocr_lang)
+            return text.strip()
+
+        except Exception as e:
+            logger.error(f"OCR 失败: 第 {page_num} 页, 错误: {e}")
+            return ""
 
     def batch_extract(self, pdf_dir: str, output_dir: str) -> List[Dict]:
         """
@@ -166,11 +204,11 @@ class PDFParser:
                 with open(txt_path, "w", encoding="utf-8") as f:
                     f.write(result["full_text"])
 
-                # 保存分页 JSON
+                # 保存分页 JSON（不含全文，避免重复）
+                meta = {k: v for k, v in result.items() if k != "full_text"}
                 json_path = output_dir / f"{pdf_file.stem}_meta.json"
-                import json
                 with open(json_path, "w", encoding="utf-8") as f:
-                    json.dump(result, f, ensure_ascii=False, indent=2)
+                    json.dump(meta, f, ensure_ascii=False, indent=2)
 
                 results.append(result)
                 logger.info(f"保存完成: {txt_path}")

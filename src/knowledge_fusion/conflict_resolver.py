@@ -190,8 +190,9 @@ class ConflictResolver:
                     "resolution": "table_priority" if self.table_priority else "confidence_based",
                 })
 
-        # 只保留 winner
-        resolved = [t for t in group if t is winner]
+        # 保留 winner + 所有非数值条目（它们不参与冲突）
+        winner_obj = str(winner.get("object", ""))
+        resolved = [t for t in group if t is winner or not self._has_number(str(t.get("object", "")))]
         logger.debug(
             f"数值冲突已裁决: {winner.get('subject')} - {winner.get('relation')}, "
             f"保留值={winner.get('object')}"

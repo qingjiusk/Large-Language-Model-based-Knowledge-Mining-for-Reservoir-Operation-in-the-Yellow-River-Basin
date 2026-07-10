@@ -21,6 +21,7 @@ class SemanticDefiner:
         client: DeepSeekClient,
         prompts_dir: str = "prompts",
         embed_model_name: str = "all-MiniLM-L6-v2",
+        device: str = "cpu",
     ):
         """
         初始化定义生成器
@@ -29,10 +30,12 @@ class SemanticDefiner:
             client: DeepSeekClient 实例
             prompts_dir: Prompt 模板目录
             embed_model_name: SentenceTransformer 模型名（用于同义聚类）
+            device: 设备 ("cpu" / "cuda" / "cuda:0")
         """
         self.client = client
         self.prompts_dir = Path(prompts_dir)
         self.embed_model_name = embed_model_name
+        self.device = device
         self._embed_model = None  # 延迟加载
         self._load_prompt()
 
@@ -50,8 +53,8 @@ class SemanticDefiner:
         """延迟加载 SentenceTransformer（避免未安装时报错）"""
         if self._embed_model is None:
             from sentence_transformers import SentenceTransformer
-            logger.info(f"加载 embedding 模型: {self.embed_model_name}")
-            self._embed_model = SentenceTransformer(self.embed_model_name)
+            logger.info(f"加载 embedding 模型: {self.embed_model_name}, device={self.device}")
+            self._embed_model = SentenceTransformer(self.embed_model_name, device=self.device)
         return self._embed_model
 
     def define_relations(
@@ -76,7 +79,7 @@ class SemanticDefiner:
         relation_list_str = "\n".join(f"- {r}" for r in unique_relations)
         prompt = self.prompt_template.format(
             relation_list=relation_list_str,
-            context_text=context_text or "无",
+            context_text=context_text.replace("{", "{{").replace("}", "}}") if context_text else "无",
         )
 
         raw_response = self.client.chat(

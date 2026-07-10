@@ -21,6 +21,7 @@ class EntityLinker:
         alias_dict_path: str = "data/ontology/alias_dict.json",
         entity_types_path: str = "data/ontology/entity_types.json",
         embed_model_name: str = "all-MiniLM-L6-v2",
+        device: str = "cpu",
         min_similarity: float = 0.75,
     ):
         """
@@ -30,10 +31,12 @@ class EntityLinker:
             alias_dict_path: 别名字典 JSON 路径
             entity_types_path: 实体类型定义 JSON 路径
             embed_model_name: embedding 模型名
+            device: 设备 ("cpu" / "cuda" / "cuda:0")
             min_similarity: 模糊匹配最小相似度
         """
         self.min_similarity = min_similarity
         self.embed_model_name = embed_model_name
+        self.device = device
         self._embed_model = None
 
         # 加载别名字典
@@ -59,7 +62,7 @@ class EntityLinker:
         """延迟加载 embedding 模型"""
         if self._embed_model is None:
             from sentence_transformers import SentenceTransformer
-            self._embed_model = SentenceTransformer(self.embed_model_name)
+            self._embed_model = SentenceTransformer(self.embed_model_name, device=self.device)
         return self._embed_model
 
     def _load_json(self, path: str) -> Dict:

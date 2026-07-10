@@ -96,17 +96,22 @@ class KGPipeline:
 
         # LLM 管线
         extractor = TripletExtractor(ds_client, prompts_dir="prompts")
-        definer = SemanticDefiner(ds_client, prompts_dir="prompts")
+        embed_device = self.config.get("embedding.device", "cpu")
+
+        definer = SemanticDefiner(ds_client, prompts_dir="prompts", device=embed_device)
         canonicalizer = RelationCanonicalizer(
             ds_client,
             standard_relations=self._load_standard_relations(),
             prompts_dir="prompts",
+            device=embed_device,
             top_k=self.config.get("canonicalization.top_k_candidates", 3),
             mode=self.config.get("canonicalization.mode", "strict"),
+            min_similarity=self.config.get("canonicalization.min_similarity_threshold", 0.7),
         )
 
         # 知识融合
         entity_linker = EntityLinker(
+            device=embed_device,
             alias_dict_path=self.config.get("ontology.alias_dict", "data/ontology/alias_dict.json"),
             entity_types_path=self.config.get("ontology.entity_types", "data/ontology/entity_types.json"),
         )

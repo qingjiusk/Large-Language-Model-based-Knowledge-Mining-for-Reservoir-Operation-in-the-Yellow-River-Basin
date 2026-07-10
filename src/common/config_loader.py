@@ -36,6 +36,7 @@ class ConfigLoader:
         支持两种格式:
           - ${VAR_NAME}          直接使用环境变量
           - ${VAR_NAME:default}  使用环境变量，不存在时用默认值
+        若环境变量缺失且无默认值，返回空字符串，避免下游拿到 ${VAR} 字面量
         """
         pattern = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
 
@@ -47,7 +48,12 @@ class ConfigLoader:
             def replacer(match):
                 var_name = match.group(1)
                 default = match.group(2)
-                return os.environ.get(var_name, default if default is not None else match.group(0))
+                env_val = os.environ.get(var_name)
+                if env_val is not None:
+                    return env_val
+                if default is not None:
+                    return default
+                return ""   # 无环境变量且无默认 → 空字符串
             return pattern.sub(replacer, config)
         else:
             return config

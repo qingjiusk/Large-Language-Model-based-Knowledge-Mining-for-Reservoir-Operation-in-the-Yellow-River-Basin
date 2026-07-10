@@ -23,6 +23,7 @@ class RelationCanonicalizer:
         standard_relations: Dict[str, str],
         prompts_dir: str = "prompts",
         embed_model_name: str = "all-MiniLM-L6-v2",
+        device: str = "cpu",
         top_k: int = 3,
         mode: str = "strict",
         min_similarity: float = 0.7,
@@ -35,6 +36,7 @@ class RelationCanonicalizer:
             standard_relations: 标准关系字典 {relation_id: description}
             prompts_dir: Prompt 模板目录
             embed_model_name: SentenceTransformer 模型名
+            device: 设备 ("cpu" / "cuda" / "cuda:0")
             top_k: 向量召回候选数
             mode: "strict" 无匹配则丢弃, "extended" 无匹配标记为候选新关系
             min_similarity: 向量召回最小相似度阈值
@@ -43,6 +45,7 @@ class RelationCanonicalizer:
         self.standard_relations = standard_relations
         self.prompts_dir = Path(prompts_dir)
         self.embed_model_name = embed_model_name
+        self.device = device
         self.top_k = top_k
         self.mode = mode
         self.min_similarity = min_similarity
@@ -68,8 +71,8 @@ class RelationCanonicalizer:
         """延迟加载 SentenceTransformer"""
         if self._embed_model is None:
             from sentence_transformers import SentenceTransformer
-            logger.info(f"加载 embedding 模型: {self.embed_model_name}")
-            self._embed_model = SentenceTransformer(self.embed_model_name)
+            logger.info(f"加载 embedding 模型: {self.embed_model_name}, device={self.device}")
+            self._embed_model = SentenceTransformer(self.embed_model_name, device=self.device)
         return self._embed_model
 
     def _build_index(self):
@@ -185,7 +188,7 @@ class RelationCanonicalizer:
         # LLM 语义校验
         prompt = self.prompt_template.format(
             source_relation=source_relation,
-            source_definition=source_definition,
+            source_definition=source_definition.replace("{", "{{").replace("}", "}}"),
             candidate_relations=candidate_text,
         )
 

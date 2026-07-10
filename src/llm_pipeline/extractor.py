@@ -55,7 +55,9 @@ class TripletExtractor:
         Returns:
             三元组列表 [{"subject": ..., "relation": ..., "object": ..., "context": ..., "confidence": ...}]
         """
-        prompt = self.text_prompt_template.format(text_chunk=text)
+        prompt = self.text_prompt_template.format(
+            text_chunk=self._escape_format(text)
+        )
         result = self.client.extract_json(prompt)
 
         triplets = self._normalize_result(result)
@@ -74,8 +76,8 @@ class TripletExtractor:
             三元组列表
         """
         prompt = self.table_prompt_template.format(
-            table_markdown=table_markdown,
-            context=context or "无",
+            table_markdown=self._escape_format(table_markdown),
+            context=self._escape_format(context or "无"),
         )
         result = self.client.extract_json(prompt)
 
@@ -117,3 +119,8 @@ class TripletExtractor:
         for t in triplets:
             t["data_type"] = source_type
         return triplets
+
+    @staticmethod
+    def _escape_format(text: str) -> str:
+        """转义文本中的 {} 字符，防止 .format() 崩溃"""
+        return text.replace("{", "{{").replace("}", "}}")

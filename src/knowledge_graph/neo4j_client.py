@@ -18,15 +18,15 @@ class Neo4jClient:
 
     # 初始化 Cypher 脚本（索引与唯一约束）
     SCHEMA_CYPHER = """
-    // 唯一约束
-    CREATE CONSTRAINT reservoir_id_unique IF NOT EXISTS FOR (n:Reservoir) REQUIRE n.id IS UNIQUE;
-    CREATE CONSTRAINT station_id_unique IF NOT EXISTS FOR (n:HydrologicalStation) REQUIRE n.id IS UNIQUE;
-    CREATE CONSTRAINT zone_id_unique IF NOT EXISTS FOR (n:WaterResourceZone) REQUIRE n.id IS UNIQUE;
-    CREATE CONSTRAINT province_id_unique IF NOT EXISTS FOR (n:Province) REQUIRE n.id IS UNIQUE;
-    CREATE CONSTRAINT river_id_unique IF NOT EXISTS FOR (n:River) REQUIRE n.id IS UNIQUE;
-    CREATE CONSTRAINT doc_id_unique IF NOT EXISTS FOR (n:Document) REQUIRE n.id IS UNIQUE;
-    CREATE CONSTRAINT rule_id_unique IF NOT EXISTS FOR (n:DispatchRule) REQUIRE n.id IS UNIQUE;
-    CREATE CONSTRAINT data_id_unique IF NOT EXISTS FOR (n:AnnualHydrologyData) REQUIRE n.id IS UNIQUE;
+    // 唯一约束 (Neo4j 5.x 兼容语法)
+    CREATE CONSTRAINT reservoir_id_unique IF NOT EXISTS FOR (n:Reservoir) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT station_id_unique IF NOT EXISTS FOR (n:HydrologicalStation) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT zone_id_unique IF NOT EXISTS FOR (n:WaterResourceZone) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT province_id_unique IF NOT EXISTS FOR (n:Province) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT river_id_unique IF NOT EXISTS FOR (n:River) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT doc_id_unique IF NOT EXISTS FOR (n:Document) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT rule_id_unique IF NOT EXISTS FOR (n:DispatchRule) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT data_id_unique IF NOT EXISTS FOR (n:AnnualHydrologyData) REQUIRE (n.id) IS UNIQUE;
 
     // 检索索引
     CREATE INDEX reservoir_name_idx IF NOT EXISTS FOR (n:Reservoir) ON (n.name);
