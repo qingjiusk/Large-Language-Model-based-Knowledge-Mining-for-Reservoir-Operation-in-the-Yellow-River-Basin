@@ -30,6 +30,7 @@ from src.knowledge_fusion.entity_linking import EntityLinker
 from src.knowledge_fusion.conflict_resolver import ConflictResolver
 from src.knowledge_graph.neo4j_client import Neo4jClient
 from src.knowledge_graph.graph_builder import GraphBuilder
+from src.document_processing.schema_mapper import SchemaMapper
 
 logger = get_logger(__name__)
 
@@ -152,13 +153,18 @@ class KGPipeline:
             logger.info(f"{'=' * 50}")
 
             try:
-                # Step 1: PDF → 文本 + 表格
-                logger.info("[Step 1/6] PDF 解析...")
+                # Step 1: PDF → 文本 + 表格（增强版：页面分类 + OCR + 表格重建）
+                logger.info("[Step 1/6] PDF 解析 (含页面分类 + 表格重建)...")
                 doc_result = pdf_parser.extract_text_with_meta(str(pdf_file))
-                tables = table_parser.extract_tables(str(pdf_file))
+                tables = doc_result.get("tables", [])
+                noise_pages = doc_result.get("noise_pages", [])
                 self.stats["pdfs_processed"] += 1
                 self.stats["tables_extracted"] += len(tables)
-                logger.info(f"  -> {doc_result['page_count']} 页文本, {len(tables)} 个表格")
+                logger.info(
+                    f"  -> {doc_result['page_count']} 页 "
+                    f"(噪声: {len(noise_pages)}), "
+                    f"{len(tables)} 个结构化表格"
+                )
 
                 # Step 2: 文本切片
                 logger.info("[Step 2/6] 文本切片...")
@@ -181,17 +187,22 @@ class KGPipeline:
                         t["page_num"] = chunk.get("page_num", 1)
                     all_triplets.extend(text_triplets)
 
-                # 表格抽取
-                for table in tables:
-                    md = table.get("markdown", "")
-                    if not md:
-                        continue
-                    ctx = f"来自 {pdf_file.name} 第{table['page']}页"
-                    table_triplets = extractor.extract_from_table(md, context=ctx)
-                    for t in table_triplets:
-                        t["source_file"] = pdf_file.name
-                        t["page_num"] = table["page"]
-                    all_triplets.extend(table_triplets)
+                # 表格抽取（使用重建后的结构化表格）
+                table_triplets = []
+                if tables:
+                    for tbl in tables:
+                        md = getattr(tbl, 'markdown', '') or tbl.get('markdown', '')
+                        if not md:
+                            continue
+                        page_num = getattr(tbl, 'page_num', 0) or tbl.get('page_num', 0)
+                        ctx = f"来自 {pdf_file.name} 第{page_num}页"
+                        extracted = extractor.extract_from_table(md, context=ctx)
+                        for t in extracted:
+                            t["source_file"] = pdf_file.name
+                            t["page_num"] = page_num
+                        table_triplets.extend(extracted)
+
+                all_triplets.extend(table_triplets)
 
                 self.stats["triplets_extracted"] += len(all_triplets)
                 logger.info(f"  -> {len(all_triplets)} 个三元组 "

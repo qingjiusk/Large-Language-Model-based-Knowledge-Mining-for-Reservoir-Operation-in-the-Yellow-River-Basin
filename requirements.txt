@@ -7,10 +7,11 @@
 openai>=1.0.0
 
 # ---------- PDF 文档解析 ----------
-pdfplumber>=0.11.0        # 高精度表格解析
-pymupdf>=1.24.0           # PDF 文本提取
+pdfplumber>=0.11.0        # 文本型 PDF 表格解析
+pymupdf>=1.24.0           # PDF 文本提取 + 页面渲染
 pytesseract>=0.3.0        # OCR 文字识别
-pdf2image>=1.17.0         # PDF 页面转图像（供 OCR 使用）
+pdf2image>=1.17.0         # PDF 页面转图像（备选方案）
+opencv-python-headless>=4.8.0  # 页面布局分析与表格检测
 
 # ---------- 数据处理 ----------
 pandas>=2.0.0

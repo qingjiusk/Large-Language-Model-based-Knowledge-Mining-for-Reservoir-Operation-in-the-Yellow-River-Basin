@@ -1,6 +1,6 @@
 """
-PDF 文档文本解析器
-基于 PyMuPDF (fitz) + Tesseract OCR，支持文本型/扫描型 PDF
+PDF 文档文本解析器 (增强版)
+集成页面分类 + OCR + 文本清洗 + 表格重建
 """
 import json
 from pathlib import Path
@@ -9,71 +9,51 @@ from typing import Dict, List, Optional
 import fitz  # PyMuPDF
 
 from src.common.logger import get_logger
+from src.document_processing.page_classifier import PageClassifier, PageInfo
+from src.document_processing.text_cleaner import TextCleaner
 
 logger = get_logger(__name__)
 
 
 class PDFParser:
-    """PDF 文本解析器，支持文本型 PDF 直接提取和扫描型 PDF OCR 回退"""
+    """PDF 文本解析器 — 页面分类 → 分类 OCR → 清洗 → 输出"""
 
     def __init__(
         self,
         skip_header_footer: bool = True,
         header_lines: int = 1,
         footer_lines: int = 1,
-        min_font_size_for_heading: float = 14.0,
         use_ocr: bool = True,
         ocr_lang: str = "chi_sim+eng",
         ocr_dpi: int = 300,
+        classifier: Optional[PageClassifier] = None,
+        text_cleaner: Optional[TextCleaner] = None,
     ):
-        """
-        初始化解析器
-
-        Args:
-            skip_header_footer: 是否过滤页眉页脚
-            header_lines: 页眉行数（从顶部算）
-            footer_lines: 页脚行数（从底部算）
-            min_font_size_for_heading: 识别为标题的最小字号（暂未实现）
-            use_ocr: 是否为扫描型 PDF 启用 OCR 回退
-            ocr_lang: Tesseract OCR 语言（默认 简体中文+英文）
-            ocr_dpi: OCR 渲染 DPI（越高越清晰但越慢）
-        """
         self.skip_header_footer = skip_header_footer
         self.header_lines = header_lines
         self.footer_lines = footer_lines
-        self.min_font_size_for_heading = min_font_size_for_heading
         self.use_ocr = use_ocr
         self.ocr_lang = ocr_lang
         self.ocr_dpi = ocr_dpi
-
-        # 延迟加载标记
-        self._is_scanned = None
+        self.classifier = classifier or PageClassifier()
+        self.text_cleaner = text_cleaner or TextCleaner()
 
     def extract_text(self, pdf_path: str) -> str:
-        """
-        解析单个 PDF 文件为纯文本
-
-        Args:
-            pdf_path: PDF 文件路径
-
-        Returns:
-            全文文本（页间以双换行分隔）
-        """
         result = self.extract_text_with_meta(pdf_path)
         return result["full_text"]
 
     def extract_text_with_meta(self, pdf_path: str) -> Dict:
         """
-        解析 PDF 并返回带元信息的结果
+        增强版 PDF 解析：分类 → OCR → 清洗
 
         Returns:
             {
-                "file_name": str,
-                "file_path": str,
-                "page_count": int,
-                "is_scanned": bool,
-                "pages": [{"page_num": int, "text": str, "method": "native"|"ocr"}, ...],
-                "full_text": str
+                "file_name", "file_path", "page_count", "is_scanned",
+                "page_types": {page_num: "TEXT"/"TABLE"/"CHART"/"MIXED"},
+                "noise_pages": [page_nums...],
+                "pages": [{page_num, text, method, page_type, is_noise}],
+                "tables": [StructuredTable...],
+                "full_text": str (只含非噪声页的清洗后文本)
             }
         """
         pdf_path = Path(pdf_path)
@@ -85,87 +65,137 @@ class PDFParser:
         except Exception as e:
             raise RuntimeError(f"PDF 文件无法打开: {pdf_path}") from e
 
-        # 检测是否为扫描版（检查前 3 页）
+        # ---- 检测是否为扫描版 ----
         self._detect_scanned(doc)
 
+        # ---- 全页 OCR（先提取文字，再根据内容分类） ----
+        # 策略：OCR 全部页面，然后用文字内容判定是否为噪声
         pages = []
-        for page_num, page in enumerate(doc, start=1):
-            raw_text = page.get_text("text")
-            text = raw_text.strip() if raw_text else ""
+        tables = []
+        table_reconstructor = None
 
-            if text:
-                method = "native"
-            elif self.use_ocr:
-                # 扫描页 — 用 OCR
-                logger.debug(f"第 {page_num} 页无嵌入文字，启用 OCR...")
-                text = self._ocr_page(pdf_path, page_num)
-                method = "ocr"
-            else:
-                method = "none"
+        for page_num in range(1, len(doc) + 1):
+            raw_text = self._ocr_page(doc, page_num)
+            cleaned_text = self.text_cleaner.clean(raw_text)
+            is_noise = self.text_cleaner.is_noise(cleaned_text)
 
-            if self.skip_header_footer and text:
-                lines = text.split("\n")
-                if len(lines) > self.header_lines + self.footer_lines + 1:
-                    h = self.header_lines
-                    f = -self.footer_lines if self.footer_lines > 0 else None
-                    text = "\n".join(lines[h:f])
+            pages.append({
+                "page_num": page_num,
+                "text": cleaned_text if not is_noise else "",
+                "raw_text": raw_text,
+                "method": "ocr",
+                "is_noise": is_noise,
+            })
 
-            pages.append({"page_num": page_num, "text": text, "method": method})
+        # ---- 基于完整 OCR 文字做页面分类 ----
+        ocr_texts = {p["page_num"]: p["raw_text"] for p in pages}
+        page_infos = self.classifier.classify_all(doc, ocr_texts)
+
+        # 合并分类结果
+        for i, pi in enumerate(page_infos):
+            pages[i]["page_type"] = pi.page_type
+            # 合并噪声判定：分类器 or 文本清洗器 判定为噪声则跳过
+            pages[i]["is_noise"] = pi.is_noise or pages[i]["is_noise"]
+
+        page_type_map = {pi.page_num: pi.page_type for pi in page_infos}
+        noise_set = {pi.page_num for pi in page_infos if pi.is_noise}
+
+        # ---- 对 TABLE 页做表格重建 ----
+        for i, pi in enumerate(page_infos):
+            if pi.has_table and not pi.is_noise:
+                page_num = pi.page_num
+                if table_reconstructor is None:
+                    from src.document_processing.table_reconstructor import TableReconstructor
+                    table_reconstructor = TableReconstructor(
+                        text_cleaner=self.text_cleaner,
+                        ocr_lang=self.ocr_lang,
+                        ocr_dpi=self.ocr_dpi,
+                    )
+                page_tables = table_reconstructor.extract_tables_from_page(
+                    doc, page_num, str(pdf_path)
+                )
+                tables.extend(page_tables)
 
         doc.close()
+
+        # 构建全文（仅非噪声页）
+        full_text = "\n\n".join(
+            p["text"] for p in pages
+            if not p["is_noise"] and p["text"].strip()
+        )
 
         result = {
             "file_name": pdf_path.name,
             "file_path": str(pdf_path.absolute()),
             "page_count": len(pages),
             "is_scanned": self._is_scanned,
+            "page_types": page_type_map,
+            "noise_pages": sorted(noise_set),
             "pages": pages,
-            "full_text": "\n\n".join(p["text"] for p in pages),
+            "tables": tables,
+            "full_text": full_text,
         }
 
-        ocr_pages = sum(1 for p in pages if p["method"] == "ocr")
+        text_pages = sum(1 for p in pages if p["method"] != "skipped")
+        noise = sum(1 for p in pages if p["is_noise"])
+        table_count = len(tables)
         logger.info(
-            f"PDF 解析完成: {pdf_path.name}, {len(pages)} 页 "
-            f"(native: {len(pages) - ocr_pages}, ocr: {ocr_pages})"
+            f"PDF 解析完成: {pdf_path.name}, "
+            f"{text_pages}/{len(pages)} 页有效, "
+            f"噪声: {noise}, 表格: {table_count}"
         )
         return result
 
+    def _fast_preview(self, doc: fitz.Document) -> Dict[int, str]:
+        """中等 DPI OCR 预览（供页面分类用，太快了 OCR 效果差）"""
+        previews = {}
+        check_pages = min(6, len(doc))
+        for page_num in range(1, check_pages + 1):
+            try:
+                page = doc[page_num - 1]
+                zoom = 150 / 72  # 150 DPI 平衡速度和质量
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                import pytesseract
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                text = pytesseract.image_to_string(img, lang=self.ocr_lang)
+                previews[page_num] = text
+            except Exception:
+                pass
+        return previews
+
     def _detect_scanned(self, doc: fitz.Document):
-        """检测 PDF 是否为扫描版（前 3 页无文字 = 扫描版）"""
+        """检测 PDF 是否为扫描版"""
         check_pages = min(3, len(doc))
         total_chars = 0
         for i in range(check_pages):
             total_chars += len(doc[i].get_text("text").strip())
-
         self._is_scanned = total_chars == 0
         if self._is_scanned:
-            logger.info("检测到扫描型 PDF，将使用 OCR 回退")
+            logger.info("检测到扫描型 PDF，将使用 OCR")
 
-    def _ocr_page(self, pdf_path: Path, page_num: int) -> str:
-        """
-        对单页 PDF 执行 OCR
-
-        使用 PyMuPDF 直接渲染页面为图像，再用 pytesseract 识别文字
-        不需要额外安装 poppler
-        """
+    def _ocr_page(self, doc: fitz.Document, page_num: int) -> str:
+        """对单页执行 OCR"""
         try:
             import pytesseract
             from PIL import Image
             import io
 
-            # 重新打开文档获取该页（避免与主循环的 doc 冲突）
-            doc = fitz.open(str(pdf_path))
             page = doc[page_num - 1]
 
-            # 渲染为高分辨率图像
-            zoom = self.ocr_dpi / 72  # 72 DPI 为基准
+            # 先尝试原生文本
+            native_text = page.get_text("text").strip()
+            if native_text and len(native_text) > 50:
+                return native_text
+
+            if not self.use_ocr:
+                return native_text
+
+            zoom = self.ocr_dpi / 72
             mat = fitz.Matrix(zoom, zoom)
             pix = page.get_pixmap(matrix=mat)
-            doc.close()
-
-            # 转为 PIL Image
             img = Image.open(io.BytesIO(pix.tobytes("png")))
-
             text = pytesseract.image_to_string(img, lang=self.ocr_lang)
             return text.strip()
 
@@ -174,16 +204,7 @@ class PDFParser:
             return ""
 
     def batch_extract(self, pdf_dir: str, output_dir: str) -> List[Dict]:
-        """
-        批量解析目录下的所有 PDF 文件
-
-        Args:
-            pdf_dir: 包含 PDF 文件的目录
-            output_dir: 文本输出目录
-
-        Returns:
-            每个文件的解析结果列表
-        """
+        """批量解析目录下的所有 PDF 文件"""
         pdf_dir = Path(pdf_dir)
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -204,11 +225,28 @@ class PDFParser:
                 with open(txt_path, "w", encoding="utf-8") as f:
                     f.write(result["full_text"])
 
-                # 保存分页 JSON（不含全文，避免重复）
-                meta = {k: v for k, v in result.items() if k != "full_text"}
+                # 保存分页 JSON
+                meta = {k: v for k, v in result.items() if k not in ("full_text", "tables")}
                 json_path = output_dir / f"{pdf_file.stem}_meta.json"
                 with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(meta, f, ensure_ascii=False, indent=2)
+
+                # 保存表格
+                if result.get("tables"):
+                    tbl_path = output_dir / f"{pdf_file.stem}_tables.json"
+                    # 只保存 markdown 和元信息（Cell 对象不可序列化）
+                    tbl_data = [{
+                        "table_id": t.table_id,
+                        "page_num": t.page_num,
+                        "headers": t.headers,
+                        "rows": t.rows,
+                        "markdown": t.markdown,
+                        "column_count": t.column_count,
+                        "row_count": t.row_count,
+                    } for t in result["tables"]]
+                    with open(tbl_path, "w", encoding="utf-8") as f:
+                        json.dump(tbl_data, f, ensure_ascii=False, indent=2)
+                    logger.info(f"表格保存: {tbl_path}, {len(tbl_data)} 个")
 
                 results.append(result)
                 logger.info(f"保存完成: {txt_path}")
