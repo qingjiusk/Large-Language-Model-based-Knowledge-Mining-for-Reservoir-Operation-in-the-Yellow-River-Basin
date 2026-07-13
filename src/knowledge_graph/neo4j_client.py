@@ -282,9 +282,10 @@ class Neo4jClient:
         import re
         if re.match(r'^[A-Z][A-Z_]*[A-Z]$', name):
             return name
-        # 否则直接使用原始名称（Neo4j 支持中文关系类型）
-        # 但需要替换特殊字符
+        # Neo4j 关系类型必须以字母/中文开头，不能以数字开头
         sanitized = re.sub(r'[^\w一-鿿]', '_', name)
+        if sanitized and sanitized[0].isdigit():
+            sanitized = 'R_' + sanitized
         return sanitized
 
     def delete_all(self, confirm: bool = False):

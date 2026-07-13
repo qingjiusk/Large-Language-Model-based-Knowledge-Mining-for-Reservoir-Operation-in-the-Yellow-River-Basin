@@ -144,7 +144,7 @@ class DeepSeekClient:
 
     def _extract_json_from_text(self, text: str) -> Any:
         """
-        从混合文本中提取 JSON 数组或对象
+        从混合文本中提取 JSON，支持截断 JSON 的回收
         """
         if not text:
             return []
@@ -158,15 +158,56 @@ class DeepSeekClient:
         except json.JSONDecodeError:
             pass
 
-        # 查找第一个 [ 或 { 到最后一个 ] 或 }
-        for start_char, end_char in [("[", "]"), ("{", "}")]:
-            start_idx = text.find(start_char)
-            end_idx = text.rfind(end_char)
-            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                try:
-                    return json.loads(text[start_idx: end_idx + 1])
-                except json.JSONDecodeError:
-                    continue
+        # 查找 JSON 数组的开始
+        start_idx = text.find("[")
+        if start_idx == -1:
+            start_idx = text.find("{")
 
-        logger.error(f"无法从文本中提取 JSON: {text[:500]}")
+        if start_idx != -1:
+            # 尝试逐步截断找到可解析的 JSON 片段
+            candidate = text[start_idx:]
+            # 先尝试完整解析
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError as e:
+                # 从错误位置前截断，尝试回收
+                if hasattr(e, 'pos') and e.pos > 0:
+                    truncated = candidate[:e.pos]
+                    # 回溯找到完整的 JSON 终止符
+                    for cut in range(len(truncated), 0, -1):
+                        attempt = truncated[:cut].rstrip()
+                        if attempt.endswith((",", ":", "{")):
+                            continue  # 跳过明显不完整的结尾
+                        try:
+                            # 尝试补全截断的 JSON
+                            fixed = self._repair_truncated_json(attempt)
+                            result = json.loads(fixed)
+                            if isinstance(result, list) and len(result) > 0:
+                                logger.warning(f"截断 JSON 回收: {len(result)} 条")
+                                return result
+                            elif isinstance(result, dict):
+                                return result
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        break
+
+        logger.warning(f"无法从文本中提取 JSON: {text[:300]}...")
         return [] if text.strip().startswith("[") else {}
+
+    @staticmethod
+    def _repair_truncated_json(text: str) -> str:
+        """尝试补全截断的 JSON 字符串"""
+        # 统计未闭合的括号
+        open_braces = text.count("{") - text.count("}")
+        open_brackets = text.count("[") - text.count("]")
+        # 统计未闭合的引号
+        in_string = False
+        for c in text:
+            if c == '"' and (len(text) == 0 or text[-1] != '\\'):
+                in_string = not in_string
+
+        if in_string:
+            text += '"'
+        text += "}" * open_braces
+        text += "]" * open_brackets
+        return text

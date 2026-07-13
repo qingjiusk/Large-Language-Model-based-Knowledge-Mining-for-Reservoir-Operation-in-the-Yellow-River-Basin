@@ -176,11 +176,16 @@ class KGPipeline:
                 logger.info("[Step 3/6] LLM 三元组抽取...")
                 all_triplets = []
 
-                # 文本抽取
+                # 文本抽取（跳过噪声 chunk，节约 API 调用）
+                noise_skipped = 0
                 for chunk in chunks:
-                    if len(chunk["content"].strip()) < 20:
+                    content = chunk["content"].strip()
+                    if len(content) < 20 or pdf_parser.text_cleaner.is_noise(content):
+                        noise_skipped += 1
                         continue
-                    text_triplets = extractor.extract_from_text(chunk["content"])
+                    chunk_id = chunk.get("chunk_id", "?")
+                    logger.debug(f'Extracting chunk {chunk_id} ({len(content)} chars)')
+                    text_triplets = extractor.extract_from_text(content)
                     # 附加溯源信息
                     for t in text_triplets:
                         t["source_file"] = pdf_file.name

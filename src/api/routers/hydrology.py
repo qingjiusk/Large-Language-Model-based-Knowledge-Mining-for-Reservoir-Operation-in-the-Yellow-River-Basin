@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from src.api.main import get_graph_query, success_response
+from src.api.dependencies import get_graph_query, success_response
 
 router = APIRouter()
 
