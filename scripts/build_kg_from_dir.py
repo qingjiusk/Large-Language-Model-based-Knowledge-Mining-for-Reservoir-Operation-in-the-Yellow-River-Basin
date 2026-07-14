@@ -172,25 +172,40 @@ class KGPipeline:
                 self.stats["chunks_created"] += len(chunks)
                 logger.info(f"  -> {len(chunks)} 个 chunks")
 
-                # Step 3: LLM 抽取（文本 + 表格）
+                # Step 3: LLM 抽取（文本批量 + 表格）
                 logger.info("[Step 3/6] LLM 三元组抽取...")
                 all_triplets = []
+                batch_size = self.config.get("deepseek.batch_size", 6)
 
-                # 文本抽取（跳过噪声 chunk，节约 API 调用）
+                # 文本抽取 — 过滤噪声后批量处理
+                clean_chunks = []
                 noise_skipped = 0
                 for chunk in chunks:
                     content = chunk["content"].strip()
                     if len(content) < 20 or pdf_parser.text_cleaner.is_noise(content):
                         noise_skipped += 1
                         continue
-                    chunk_id = chunk.get("chunk_id", "?")
-                    logger.debug(f'Extracting chunk {chunk_id} ({len(content)} chars)')
-                    text_triplets = extractor.extract_from_text(content)
+                    clean_chunks.append({
+                        "chunk_id": chunk.get("chunk_id", ""),
+                        "content": content,
+                        "page_num": chunk.get("page_num", 1),
+                        "source_file": pdf_file.name,
+                    })
+
+                if clean_chunks:
+                    logger.info(f"  文本批量抽取: {len(clean_chunks)} chunks, batch_size={batch_size}")
+                    text_triplets = extractor.extract_from_text_batch(
+                        clean_chunks, batch_size=batch_size
+                    )
                     # 附加溯源信息
                     for t in text_triplets:
-                        t["source_file"] = pdf_file.name
-                        t["page_num"] = chunk.get("page_num", 1)
+                        t.setdefault("source_file", pdf_file.name)
+                        t.setdefault("page_num", t.get("page_num", 1))
                     all_triplets.extend(text_triplets)
+                    logger.info(f"  文本批量完成: {len(text_triplets)} 三元组")
+
+                if noise_skipped > 0:
+                    logger.info(f"  跳过噪声 chunk: {noise_skipped}")
 
                 # 表格抽取（使用重建后的结构化表格）
                 table_triplets = []

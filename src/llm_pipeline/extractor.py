@@ -31,6 +31,7 @@ class TripletExtractor:
         """从文件加载 prompt 模板"""
         text_prompt_path = self.prompts_dir / "extract.txt"
         table_prompt_path = self.prompts_dir / "table_extract.txt"
+        batch_prompt_path = self.prompts_dir / "extract_batch.txt"
 
         if not text_prompt_path.exists():
             raise FileNotFoundError(f"Prompt 文件不存在: {text_prompt_path}")
@@ -42,6 +43,13 @@ class TripletExtractor:
 
         with open(table_prompt_path, "r", encoding="utf-8") as f:
             self.table_prompt_template = f.read()
+
+        # 批量抽取模板（可选）
+        if batch_prompt_path.exists():
+            with open(batch_prompt_path, "r", encoding="utf-8") as f:
+                self.batch_prompt_template = f.read()
+        else:
+            self.batch_prompt_template = None
 
         logger.info(f"Prompt 模板加载完成: {len(self.text_prompt_template)} / {len(self.table_prompt_template)} chars")
 
@@ -63,6 +71,113 @@ class TripletExtractor:
         triplets = self._normalize_result(result)
         logger.debug(f"文本抽取完成: {len(triplets)} 个三元组")
         return self._tag_source(triplets, "text")
+
+    def extract_from_text_batch(
+        self,
+        chunks: List[Dict],
+        batch_size: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """
+        批量抽取：一次 API 调用处理多个 chunk
+
+        Args:
+            chunks: chunk 列表，每项需含 {"chunk_id": str, "content": str}
+            batch_size: 每批处理的最大 chunk 数
+
+        Returns:
+            所有三元组列表（自动附加 chunk_id 溯源信息）
+        """
+        if not self.batch_prompt_template:
+            # 无批量模板时回退到逐个抽取
+            logger.warning("无批量 Prompt 模板，回退到逐个抽取")
+            all_triplets = []
+            for chunk in chunks:
+                triplets = self.extract_from_text(chunk["content"])
+                for t in triplets:
+                    t["chunk_id"] = chunk.get("chunk_id", "")
+                    t["page_num"] = chunk.get("page_num", 1)
+                all_triplets.extend(triplets)
+            return all_triplets
+
+        all_triplets = []
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+            batch_triplets = self._extract_batch(batch)
+            all_triplets.extend(batch_triplets)
+            logger.debug(
+                f"批量抽取: 批次 {i // batch_size + 1}, "
+                f"{len(batch)} chunks → {len(batch_triplets)} 三元组"
+            )
+
+        logger.info(f"批量抽取完成: {len(chunks)} chunks → {len(all_triplets)} 三元组")
+        return all_triplets
+
+    def _extract_batch(self, chunks: List[Dict]) -> List[Dict[str, Any]]:
+        """处理单个批次"""
+        # 构建批量文本
+        batch_parts = []
+        for chunk in chunks:
+            cid = chunk.get("chunk_id", f"chunk_{chunks.index(chunk):04d}")
+            content = chunk["content"].strip()
+            batch_parts.append(f"[ID:{cid}]\n{content}")
+
+        batch_text = "\n\n---\n\n".join(batch_parts)
+
+        # 调用 LLM
+        prompt = self.batch_prompt_template.format(
+            batch_texts=self._escape_format(batch_text)
+        )
+        result = self.client.extract_json(prompt)
+
+        # 解析批量结果
+        return self._parse_batch_result(result, chunks)
+
+    def _parse_batch_result(
+        self,
+        result: Any,
+        chunks: List[Dict],
+    ) -> List[Dict[str, Any]]:
+        """解析批量抽取的返回结果"""
+        # 建立 chunk_id → chunk 元信息映射
+        chunk_meta = {}
+        for c in chunks:
+            cid = c.get("chunk_id", "")
+            chunk_meta[cid] = {
+                "page_num": c.get("page_num", 1),
+                "source_file": c.get("source_file", ""),
+            }
+
+        all_triplets = []
+
+        # 格式1: {"results": [{"chunk_id": ..., "triplets": [...]}, ...]}
+        if isinstance(result, dict) and "results" in result:
+            for item in result["results"]:
+                cid = item.get("chunk_id", "")
+                triplets = item.get("triplets", [])
+                meta = chunk_meta.get(cid, {})
+                for t in triplets:
+                    t["chunk_id"] = cid
+                    t.setdefault("page_num", meta.get("page_num", 1))
+                    t.setdefault("source_file", meta.get("source_file", ""))
+                all_triplets.extend(triplets)
+
+        # 格式2: 直接返回三元组列表（无 chunk_id 映射）
+        elif isinstance(result, list):
+            logger.warning("批量抽取返回了无分组的列表，无法溯源 chunk")
+            all_triplets = result
+
+        # 格式3: JSON 解析失败的回退 — 逐个抽取
+        else:
+            logger.warning("批量结果格式异常，回退逐个抽取")
+            for chunk in chunks:
+                triplets = self.extract_from_text(chunk["content"])
+                cid = chunk.get("chunk_id", "")
+                for t in triplets:
+                    t["chunk_id"] = cid
+                    t["page_num"] = chunk.get("page_num", 1)
+                all_triplets.extend(triplets)
+
+        return self._tag_source(self._normalize_result(all_triplets), "text")
 
     def extract_from_table(self, table_markdown: str, context: str = "") -> List[Dict[str, Any]]:
         """

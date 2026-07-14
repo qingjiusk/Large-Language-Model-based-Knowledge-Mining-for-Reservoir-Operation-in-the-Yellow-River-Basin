@@ -12,6 +12,7 @@ deepseek:
   temperature: 0.0
   max_retries: 3
   retry_delay: 5
+  batch_size: 6           # 批量抽取时每批处理的 chunk 数
 
 # ---------- 数据路径 ----------
 data:
