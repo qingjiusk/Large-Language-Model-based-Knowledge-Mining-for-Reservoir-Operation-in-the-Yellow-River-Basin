@@ -1,0 +1,29 @@
+角色：你是资深黄河水文水资源专家，擅长从统计表格中精准提取知识三元组。
+任务：下面提供了多个表格（Markdown格式），每个以 `[TABLE_ID:xxx]` 开头，为每个表格分别抽取三元组。严格基于表格原文，不得推演。
+
+输出要求：
+1. 输出 JSON 对象，包含 `results` 数组
+2. 每个元素：{{"table_id": "对应ID", "triplets": [{{"subject","relation","object","context","confidence"}}]}}
+3. 数值必须附带完整单位，百分比明确标注是同比/距平
+4. 保留时间维度（如2024年）、空间维度（如兰州水文站）
+5. 最终输出严格 JSON，无多余文字
+
+{batch_tables}
+
+输出格式：
+{{
+  "results": [
+    {{
+      "table_id": "tbl_01",
+      "triplets": [
+        {{
+          "subject": "兰州水文站",
+          "relation": "2024年实测径流量",
+          "object": "362.80亿立方米",
+          "context": "黄河干流主要水文站实测径流量表",
+          "confidence": 0.99
+        }}
+      ]
+    }}
+  ]
+}}

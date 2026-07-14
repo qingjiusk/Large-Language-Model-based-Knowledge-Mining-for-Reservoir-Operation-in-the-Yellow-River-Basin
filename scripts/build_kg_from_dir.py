@@ -134,7 +134,7 @@ class KGPipeline:
                 self.skip_neo4j = True
 
         # ---- 逐文件处理 ----
-        pdf_files = list(pdf_dir.glob("*.pdf")) + list(pdf_dir.glob("*.PDF"))
+        pdf_files = list(set(pdf_dir.glob("*.pdf")))  # Windows glob 大小写不敏感
         logger.info(f"找到 {len(pdf_files)} 个 PDF 文件")
 
         output_dir = Path(self.config.get("data.processed_dir", "data/processed"))
@@ -202,20 +202,18 @@ class KGPipeline:
                 if noise_skipped > 0:
                     logger.info(f"  跳过噪声 chunk: {noise_skipped}")
 
-                # 表格抽取（PP-StructureV3 已自动检测 + 识别表格为 Markdown）
+                # 表格抽取（PP-StructureV3 已自动检测 + 识别表格为 Markdown，批量处理）
                 table_triplets = []
                 if tables:
+                    # 附加上下文信息
                     for tbl in tables:
-                        md = tbl.get("markdown", "") if isinstance(tbl, dict) else getattr(tbl, "markdown", "")
-                        if not md:
-                            continue
-                        page_num = tbl.get("page_num", 0) if isinstance(tbl, dict) else getattr(tbl, "page_num", 0)
-                        ctx = f"来自 {pdf_file.name} 第{page_num}页"
-                        extracted = extractor.extract_from_table(md, context=ctx)
-                        for t in extracted:
-                            t["source_file"] = pdf_file.name
-                            t["page_num"] = page_num
-                        table_triplets.extend(extracted)
+                        if isinstance(tbl, dict):
+                            tbl["context"] = f"来自 {pdf_file.name} 第{tbl.get('page_num', 0)}页"
+                    table_triplets = extractor.extract_from_table_batch(tables, batch_size=batch_size)
+                    for t in table_triplets:
+                        t.setdefault("source_file", pdf_file.name)
+                        t.setdefault("page_num", t.get("page_num", 1))
+                    logger.info(f"  表格批量完成: {len(table_triplets)} 三元组")
 
                 all_triplets.extend(table_triplets)
 

@@ -29,29 +29,19 @@ class TripletExtractor:
 
     def _load_prompts(self):
         """从文件加载 prompt 模板"""
-        text_prompt_path = self.prompts_dir / "extract.txt"
-        table_prompt_path = self.prompts_dir / "table_extract.txt"
-        batch_prompt_path = self.prompts_dir / "extract_batch.txt"
+        def _read(name):
+            p = self.prompts_dir / name
+            if not p.exists():
+                raise FileNotFoundError(f"Prompt 文件不存在: {p}")
+            return open(p, encoding="utf-8").read()
+        def _opt(name):
+            p = self.prompts_dir / name
+            return open(p, encoding="utf-8").read() if p.exists() else None
 
-        if not text_prompt_path.exists():
-            raise FileNotFoundError(f"Prompt 文件不存在: {text_prompt_path}")
-        if not table_prompt_path.exists():
-            raise FileNotFoundError(f"Prompt 文件不存在: {table_prompt_path}")
-
-        with open(text_prompt_path, "r", encoding="utf-8") as f:
-            self.text_prompt_template = f.read()
-
-        with open(table_prompt_path, "r", encoding="utf-8") as f:
-            self.table_prompt_template = f.read()
-
-        # 批量抽取模板（可选）
-        if batch_prompt_path.exists():
-            with open(batch_prompt_path, "r", encoding="utf-8") as f:
-                self.batch_prompt_template = f.read()
-        else:
-            self.batch_prompt_template = None
-
-        logger.info(f"Prompt 模板加载完成: {len(self.text_prompt_template)} / {len(self.table_prompt_template)} chars")
+        self.text_prompt_template = _read("extract.txt")
+        self.table_prompt_template = _read("table_extract.txt")
+        self.batch_prompt_template = _opt("extract_batch.txt")
+        self.batch_table_template = _opt("table_extract_batch.txt")
 
     def extract_from_text(self, text: str) -> List[Dict[str, Any]]:
         """
@@ -180,25 +170,55 @@ class TripletExtractor:
         return self._tag_source(self._normalize_result(all_triplets), "text")
 
     def extract_from_table(self, table_markdown: str, context: str = "") -> List[Dict[str, Any]]:
-        """
-        从表格 Markdown 中抽取三元组
-
-        Args:
-            table_markdown: Markdown 格式的表格内容
-            context: 表格所在文档上下文（如章节标题、说明文字）
-
-        Returns:
-            三元组列表
-        """
+        """从单个表格 Markdown 中抽取三元组"""
         prompt = self.table_prompt_template.format(
             table_markdown=self._escape_format(table_markdown),
             context=self._escape_format(context or "无"),
         )
-        result = self.client.extract_json(prompt)
-
-        triplets = self._normalize_result(result)
-        logger.debug(f"表格抽取完成: {len(triplets)} 个三元组")
+        triplets = self._normalize_result(self.client.extract_json(prompt))
         return self._tag_source(triplets, "tabular")
+
+    def extract_from_table_batch(
+        self, tables: List[Dict], batch_size: int = 6
+    ) -> List[Dict[str, Any]]:
+        """批量表格抽取：一次 API 调用处理多个表格"""
+        if not self.batch_table_template:
+            # 无批量模板时回退逐个
+            all_t = []
+            for tbl in tables:
+                all_t.extend(self.extract_from_table(
+                    tbl.get("markdown", ""), tbl.get("context", "")
+                ))
+            return all_t
+
+        all_triplets = []
+        for i in range(0, len(tables), batch_size):
+            batch = tables[i:i + batch_size]
+            batch_parts = []
+            for tbl in batch:
+                tid = tbl.get("table_id", f"tbl_{i}")
+                batch_parts.append(f"[TABLE_ID:{tid}]\n{tbl.get('markdown', '')}")
+
+            prompt = self.batch_table_template.format(
+                batch_tables=self._escape_format("\n\n---\n\n".join(batch_parts))
+            )
+            result = self.client.extract_json(prompt)
+
+            # 解析批量表格结果
+            if isinstance(result, dict) and "results" in result:
+                for item in result["results"]:
+                    for t in item.get("triplets", []):
+                        t["table_id"] = item.get("table_id", "")
+                    all_triplets.extend(item.get("triplets", []))
+            else:
+                # 回退逐个
+                for tbl in batch:
+                    all_triplets.extend(self.extract_from_table(
+                        tbl.get("markdown", ""), tbl.get("context", "")
+                    ))
+
+        logger.info(f"批量表格完成: {len(tables)} 表 → {len(all_triplets)} 三元组")
+        return self._tag_source(self._normalize_result(all_triplets), "tabular")
 
     def _normalize_result(self, result: Any) -> List[Dict[str, Any]]:
         """

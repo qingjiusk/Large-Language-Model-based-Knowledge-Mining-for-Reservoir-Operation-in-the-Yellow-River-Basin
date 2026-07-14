@@ -8,11 +8,11 @@ deepseek:
   base_url: "${DEEPSEEK_BASE_URL:https://api.deepseek.com}"
   api_key: "${DEEPSEEK_API_KEY}"
   model: "${DEEPSEEK_MODEL:deepseek-v4-flash}"
-  max_tokens: 16384
+  max_tokens: 32768        # 增大避免表格批量 JSON 截断（48K chars → 32K tokens）
   temperature: 0.0
   max_retries: 3
   retry_delay: 5
-  batch_size: 6           # 批量抽取时每批处理的 chunk 数
+  batch_size: 4            # 降为 4，表格批量 JSON 约 30K chars 不截断
 
 # ---------- 数据路径 ----------
 data:

@@ -81,34 +81,47 @@ class PaddleOCREngine:
         page_num: int,
         source_file: str,
     ) -> Dict[str, Any]:
-        """解析 PP-StructureV3 单页结果"""
-        # 提取 markdown 文本
-        md_text = getattr(result, "markdown_texts", "") or ""
-        if isinstance(md_text, dict):
-            md_text = md_text.get("markdown_texts", "")
+        """解析 PP-StructureV3 单页结果（LayoutParsingResultV2）"""
+        # ---- 文本提取 ----
+        # PP-StructureV3 结果对象是 dict-like，OCR 文本在 overall_ocr_res.rec_texts
+        ocr_res = result.get("overall_ocr_res", {}) if hasattr(result, "get") else None
+        if ocr_res and hasattr(ocr_res, "get"):
+            rec_texts = ocr_res.get("rec_texts", []) or []
+        else:
+            rec_texts = []
 
-        md_text = str(md_text).strip()
+        plain_text = "\n".join(str(t) for t in rec_texts if t)
 
-        # 提取图片信息
+        # ---- 表格提取 ----
+        tables = []
+        table_res_list = result.get("table_res_list", []) if hasattr(result, "get") else []
+        for tbl in table_res_list:
+            parsed = self._parse_table_result(tbl, page_num)
+            if parsed:
+                tables.append(parsed)
+
+        # ---- 图片提取 ----
         images = []
-        if hasattr(result, "markdown_images"):
-            imgs = getattr(result, "markdown_images", {}) or {}
-            for name, img in imgs.items():
-                images.append({"name": name, "size": getattr(img, "size", (0, 0))})
+        layout_res = result.get("layout_det_res", {}) if hasattr(result, "get") else {}
+        # 提取图片区域信息
+        if hasattr(layout_res, "get"):
+            for item in layout_res.get("boxes", []) or []:
+                if hasattr(item, "get") and item.get("label") in ("image", "figure"):
+                    images.append({"bbox": item.get("coordinate", [])})
 
-        # 提取纯文本（去掉 markdown 标记）
-        plain_text = self._md_to_text(md_text)
+        # ---- 生成 Markdown 表示 ----
+        md_parts = []
+        if plain_text:
+            md_parts.append(plain_text)
+        for tbl in tables:
+            md_parts.append(tbl.get("markdown", ""))
 
-        # 提取表格
-        tables = self._extract_tables(md_text)
-
-        # 检测空页
         is_empty = len(plain_text.strip()) < 10 and len(tables) == 0
 
         return {
             "page_num": page_num,
             "source_file": Path(source_file).name,
-            "markdown_text": md_text,
+            "markdown_text": "\n\n".join(md_parts),
             "plain_text": plain_text,
             "tables": tables,
             "images": images,
@@ -116,83 +129,71 @@ class PaddleOCREngine:
             "char_count": len(plain_text),
         }
 
-    def _extract_tables(self, md_text: str) -> List[Dict[str, Any]]:
-        """
-        从 Markdown 中提取表格
-
-        Returns:
-            [{table_id, headers, rows, markdown, row_count, col_count}]
-        """
-        tables = []
-        lines = md_text.split("\n")
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            # 检测 Markdown 表格开始：| ... | ... |
-            if line.startswith("|") and line.endswith("|"):
-                j = i + 1
-                # 检查分隔行
-                if j < len(lines) and re.match(r'^\|[\s\-:|]+\|$', lines[j].strip()):
-                    # 收集表格全部行
-                    table_lines = [line]
-                    j += 1
-                    while j < len(lines) and lines[j].strip().startswith("|"):
-                        table_lines.append(lines[j].strip())
-                        j += 1
-
-                    if len(table_lines) >= 2:  # 表头 + 至少 1 行数据
-                        headers, rows = self._parse_md_table(table_lines)
-                        tbl_id = f"tbl_p{len(tables):02d}"
-                        tables.append({
-                            "table_id": tbl_id,
-                            "headers": headers,
-                            "rows": rows,
-                            "markdown": "\n".join(table_lines),
-                            "row_count": len(rows),
-                            "col_count": len(headers),
-                        })
-                    i = j
-                    continue
-            i += 1
-
-        return tables
-
-    def _parse_md_table(
+    def _parse_table_result(
         self,
-        md_lines: List[str],
-    ) -> tuple:
-        """解析 Markdown 表格行"""
-        def split_cells(line: str) -> List[str]:
-            # 去掉首尾的 |，按 | 分割
-            s = line.strip().strip("|")
-            return [c.strip() for c in s.split("|")]
+        tbl: Any,
+        page_num: int,
+    ) -> Optional[Dict[str, Any]]:
+        """解析 PP-StructureV3 表格结果"""
+        if not hasattr(tbl, "get"):
+            return None
 
-        # 过滤掉分隔行
+        # 表格 HTML/Markdown
+        pred_html = tbl.get("pred_html", "") or ""
+        pred_md = tbl.get("pred_markdown", "") or ""
+
+        # 优先用 Markdown，没有再用 HTML 转换
+        md = pred_md if pred_md else self._html_to_md(pred_html)
+
+        if not md.strip():
+            return None
+
+        # 从 Markdown 解析表头和数据
+        headers, rows = self._parse_simple_table(md)
+
+        return {
+            "table_id": f"tbl_p{page_num}_{len(tables) if hasattr(self, '_tables') else 0:02d}",
+            "page_num": page_num,
+            "headers": headers,
+            "rows": rows,
+            "markdown": md,
+            "row_count": len(rows),
+            "col_count": len(headers),
+        }
+
+    def _parse_simple_table(self, md: str) -> tuple:
+        """从 Markdown 表格文本解析表头和数据行"""
+        lines = [l.strip() for l in md.split("\n") if l.strip().startswith("|")]
         data_lines = [
-            split_cells(l) for l in md_lines
+            l for l in lines
             if not re.match(r'^\|[\s\-:|]+\|$', l.strip())
         ]
 
-        headers = data_lines[0] if data_lines else []
-        rows = data_lines[1:] if len(data_lines) > 1 else []
+        def split_cells(line: str) -> list:
+            return [c.strip() for c in line.strip().strip("|").split("|")]
+
+        headers = split_cells(data_lines[0]) if data_lines else []
+        rows = [split_cells(l) for l in data_lines[1:]] if len(data_lines) > 1 else []
 
         return headers, rows
 
-    def _md_to_text(self, md: str) -> str:
-        """Markdown 转纯文本"""
-        if not md:
+    def _html_to_md(self, html: str) -> str:
+        """简单的 HTML table → Markdown 转换"""
+        if not html or "<table" not in html.lower():
+            return html
+
+        rows = []
+        for tr in re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE):
+            cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr, re.DOTALL | re.IGNORECASE)
+            cells_clean = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+            rows.append(cells_clean)
+
+        if not rows:
             return ""
 
-        text = md
-        # 移除 HTML 标签 (图片等)
-        text = re.sub(r'<[^>]+>', '', text)
-        # 移除 Markdown 标题标记
-        text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
-        # 移除表格行（以 | 开头）
-        text = re.sub(r'^\|.*\|$', '', text, flags=re.MULTILINE)
-        # 移除分隔行
-        text = re.sub(r'^\|[\s\-:|]+\|$', '', text, flags=re.MULTILINE)
-        # 合并多余换行
-        text = re.sub(r'\n{3,}', '\n\n', text)
+        md_lines = ["| " + " | ".join(rows[0]) + " |"]
+        md_lines.append("| " + " | ".join(["---"] * len(rows[0])) + " |")
+        for row in rows[1:]:
+            md_lines.append("| " + " | ".join(row) + " |")
 
-        return text.strip()
+        return "\n".join(md_lines)
