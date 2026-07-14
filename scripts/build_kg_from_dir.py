@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.common.config_loader import ConfigLoader
 from src.common.logger import get_logger, setup_logging
 from src.document_processing.pdf_parser import PDFParser
-from src.document_processing.table_parser import TableParser
 from src.document_processing.text_splitter import TextSplitter
 from src.llm_pipeline.llm_client import DeepSeekClient
 from src.llm_pipeline.extractor import TripletExtractor
@@ -84,12 +83,8 @@ class KGPipeline:
             temperature=ds_config.get("temperature", 0.0),
         )
 
-        # 文档处理
+        # 文档处理（PaddleOCR 自动检测表格，无需 pdfplumber）
         pdf_parser = PDFParser(skip_header_footer=True)
-        table_parser = TableParser(
-            min_table_rows=self.config.get("table_parser.min_table_rows", 2),
-            output_format="markdown",
-        )
         text_splitter = TextSplitter(
             chunk_size=self.config.get("text_splitter.chunk_size", 2000),
             chunk_overlap=self.config.get("text_splitter.chunk_overlap", 200),
@@ -207,14 +202,14 @@ class KGPipeline:
                 if noise_skipped > 0:
                     logger.info(f"  跳过噪声 chunk: {noise_skipped}")
 
-                # 表格抽取（使用重建后的结构化表格）
+                # 表格抽取（PP-StructureV3 已自动检测 + 识别表格为 Markdown）
                 table_triplets = []
                 if tables:
                     for tbl in tables:
-                        md = getattr(tbl, 'markdown', '') or tbl.get('markdown', '')
+                        md = tbl.get("markdown", "") if isinstance(tbl, dict) else getattr(tbl, "markdown", "")
                         if not md:
                             continue
-                        page_num = getattr(tbl, 'page_num', 0) or tbl.get('page_num', 0)
+                        page_num = tbl.get("page_num", 0) if isinstance(tbl, dict) else getattr(tbl, "page_num", 0)
                         ctx = f"来自 {pdf_file.name} 第{page_num}页"
                         extracted = extractor.extract_from_table(md, context=ctx)
                         for t in extracted:
