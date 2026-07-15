@@ -231,20 +231,28 @@ class RelationCanonicalizer:
 
         for rel in unique_relations:
             if not rel:
-                rel_map[rel] = rel
+                rel_map[rel] = (rel, None)
                 continue
             definition = definitions.get(rel, rel)
             result = self.canonicalize(rel, definition)
             match = result.get("match_result", "NEW_RELATION")
-            rel_map[rel] = rel if match == "NEW_RELATION" else match
+            # 始终保留原始中文关系名，避免被英文 ID 替换
+            # 标准 ID 存入 relation_id 字段用于图谱对齐
+            if match == "NEW_RELATION":
+                rel_map[rel] = (rel, None)
+            else:
+                rel_map[rel] = (rel, match)  # (中文原名, 标准ID)
 
-        # 替换三元组中的关系
+        # 标准化三元组（保留中文关系名，附加标准ID）
         canonicalized = []
         for t in triplets:
             new_t = dict(t)
             orig_rel = new_t.get("relation", "")
-            new_t["relation"] = rel_map.get(orig_rel, orig_rel)
+            kept_rel, std_id = rel_map.get(orig_rel, (orig_rel, None))
+            new_t["relation"] = kept_rel          # 始终保留中文原名
             new_t["original_relation"] = orig_rel
+            if std_id:
+                new_t["relation_id"] = std_id     # 标准 ID 作为附加属性
             canonicalized.append(new_t)
 
         logger.info(f"批量标准化完成: {len(unique_relations)} 个唯一关系")

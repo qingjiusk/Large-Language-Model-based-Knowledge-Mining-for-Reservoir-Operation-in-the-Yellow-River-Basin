@@ -53,3 +53,6 @@ desktop.ini
 
 # ====== Claude / AI 工具 ======
 .claude/plans/
+/data/processed
+data/processed/黄河水资源2024_triplets.json
+data/processed/黄河水资源2024_triplets.json

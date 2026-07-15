@@ -30,6 +30,7 @@ from src.knowledge_fusion.conflict_resolver import ConflictResolver
 from src.knowledge_graph.neo4j_client import Neo4jClient
 from src.knowledge_graph.graph_builder import GraphBuilder
 from src.document_processing.schema_mapper import SchemaMapper
+from src.document_processing.image_parser import ImageParser, SUPPORTED_FORMATS
 
 logger = get_logger(__name__)
 
@@ -133,24 +134,45 @@ class KGPipeline:
                 logger.warning("将跳过图谱写入，仅做抽取")
                 self.skip_neo4j = True
 
-        # ---- 逐文件处理 ----
-        pdf_files = list(set(pdf_dir.glob("*.pdf")))  # Windows glob 大小写不敏感
-        logger.info(f"找到 {len(pdf_files)} 个 PDF 文件")
+        # ---- 收集文件 (PDF + 图片) ----
+        pdf_files = list(set(pdf_dir.glob("*.pdf")))
+        image_files = []
+        for fmt in SUPPORTED_FORMATS:
+            image_files.extend(pdf_dir.glob(f"*{fmt}"))
+            image_files.extend(pdf_dir.glob(f"*{fmt.upper()}"))
+        image_files = list(set(image_files))
+
+        all_input_files = pdf_files + image_files
+        logger.info(f"找到 {len(pdf_files)} 个 PDF + {len(image_files)} 个图片")
+
+        if not all_input_files:
+            logger.warning(f"目录中无文件: {pdf_dir}")
+            return {}
 
         output_dir = Path(self.config.get("data.processed_dir", "data/processed"))
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 图片解析器（延迟初始化）
+        image_parser = None
+
         all_resolved = []
 
-        for pdf_file in pdf_files:
+        # ---- 统一处理循环 ----
+        for input_file in all_input_files:
+            suffix = input_file.suffix.lower()
             logger.info(f"\n{'=' * 50}")
-            logger.info(f"处理文件: {pdf_file.name}")
+            logger.info(f"处理文件: {input_file.name}")
             logger.info(f"{'=' * 50}")
 
             try:
-                # Step 1: PDF → 文本 + 表格（增强版：页面分类 + OCR + 表格重建）
-                logger.info("[Step 1/6] PDF 解析 (含页面分类 + 表格重建)...")
-                doc_result = pdf_parser.extract_text_with_meta(str(pdf_file))
+                # Step 1: 解析 → 文本 + 表格
+                logger.info("[Step 1/6] 解析...")
+                if suffix == ".pdf":
+                    doc_result = pdf_parser.extract_text_with_meta(str(input_file))
+                else:
+                    if image_parser is None:
+                        image_parser = ImageParser(text_cleaner=pdf_parser.text_cleaner)
+                    doc_result = image_parser.extract_text_with_meta(str(input_file))
                 tables = doc_result.get("tables", [])
                 noise_pages = doc_result.get("noise_pages", [])
                 self.stats["pdfs_processed"] += 1
@@ -184,7 +206,7 @@ class KGPipeline:
                         "chunk_id": chunk.get("chunk_id", ""),
                         "content": content,
                         "page_num": chunk.get("page_num", 1),
-                        "source_file": pdf_file.name,
+                        "source_file": input_file.name,
                     })
 
                 if clean_chunks:
@@ -194,7 +216,7 @@ class KGPipeline:
                     )
                     # 附加溯源信息
                     for t in text_triplets:
-                        t.setdefault("source_file", pdf_file.name)
+                        t.setdefault("source_file", input_file.name)
                         t.setdefault("page_num", t.get("page_num", 1))
                     all_triplets.extend(text_triplets)
                     logger.info(f"  文本批量完成: {len(text_triplets)} 三元组")
@@ -208,10 +230,10 @@ class KGPipeline:
                     # 附加上下文信息
                     for tbl in tables:
                         if isinstance(tbl, dict):
-                            tbl["context"] = f"来自 {pdf_file.name} 第{tbl.get('page_num', 0)}页"
+                            tbl["context"] = f"来自 {input_file.name} 第{tbl.get('page_num', 0)}页"
                     table_triplets = extractor.extract_from_table_batch(tables, batch_size=batch_size)
                     for t in table_triplets:
-                        t.setdefault("source_file", pdf_file.name)
+                        t.setdefault("source_file", input_file.name)
                         t.setdefault("page_num", t.get("page_num", 1))
                     logger.info(f"  表格批量完成: {len(table_triplets)} 三元组")
 
@@ -242,13 +264,13 @@ class KGPipeline:
                 all_resolved.extend(canonicalized)
 
                 # 保存中间结果
-                result_path = output_dir / f"{pdf_file.stem}_triplets.json"
+                result_path = output_dir / f"{input_file.stem}_triplets.json"
                 with open(result_path, "w", encoding="utf-8") as f:
                     json.dump(canonicalized, f, ensure_ascii=False, indent=2)
                 logger.info(f"  -> 中间结果已保存: {result_path}")
 
             except Exception as e:
-                logger.error(f"处理失败: {pdf_file.name}, 错误: {e}", exc_info=True)
+                logger.error(f"处理失败: {input_file.name}, 错误: {e}", exc_info=True)
                 continue
 
         # Step 6: Neo4j 图谱写入
