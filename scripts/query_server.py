@@ -2,9 +2,10 @@
 """
 HydroBrain 自然语言查询服务
 Gemma 3 4B Text2Cypher (llama-cpp-python) + Neo4j
+同时托管前端静态页面 (fronted/)
 
 启动: conda activate zagism && python scripts/query_server.py
-访问: http://127.0.0.1:8001/docs
+访问: http://127.0.0.1:8001
 """
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,7 +13,13 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# 前端目录
+ROOT_DIR = Path(__file__).parent.parent
+FRONTED_DIR = ROOT_DIR / "fronted"
 
 # ============================================================
 # Neo4j Schema Context (注入 Prompt)
@@ -186,6 +193,62 @@ def execute_cypher(cypher: str) -> list:
         return [dict(r) for r in records]
 
 
+def format_answer(results: list, question: str) -> str:
+    """将查询结果转为自然语言回答"""
+    if not results:
+        return f"未找到与「{question}」相关的数据，请尝试换个问法。"
+
+    # 检查是否包含错误
+    if len(results) == 1 and "error" in results[0]:
+        return f"查询执行受限: {results[0]['error']}"
+
+    lines = []
+    for r in results[:8]:
+        # 尝试多种可能的字段名
+        entity = (
+            r.get("实体")
+            or r.get("s.name")
+            or r.get("r.name")
+            or r.get("z.name")
+            or r.get("name")
+            or ""
+        )
+        indicator = r.get("指标") or r.get("type(r)") or ""
+        value = (
+            r.get("数值")
+            or r.get("d.value")
+            or r.get("c.value")
+            or r.get("value")
+            or ""
+        )
+        unit = r.get("d.unit") or r.get("unit") or ""
+
+        parts = []
+        if entity:
+            parts.append(str(entity))
+        if indicator:
+            parts.append(str(indicator))
+        if value:
+            val_str = str(value)
+            if unit:
+                val_str += str(unit)
+            parts.append(val_str)
+
+        if parts:
+            lines.append("• " + " | ".join(parts))
+
+    if not lines:
+        # 兜底：直接展示原始字段
+        for r in results[:5]:
+            kv = ", ".join(f"{k}: {v}" for k, v in r.items())
+            lines.append(f"• {kv}")
+
+    if len(results) > 8:
+        lines.append(f"... 共 {len(results)} 条结果")
+
+    return "\n".join(lines)
+
+
 # ============================================================
 # FastAPI
 # ============================================================
@@ -197,15 +260,75 @@ async def lifespan(app: FastAPI):
     if _neo4j:
         _neo4j.close()
 
-app = FastAPI(title="HydroBrain 查询服务", version="1.0", lifespan=lifespan)
+app = FastAPI(title="HydroBrain 查询服务", version="2.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# ── 静态文件 ──
+if FRONTED_DIR.exists():
+    for subdir in ["css", "js", "images"]:
+        sd = FRONTED_DIR / subdir
+        if sd.exists():
+            app.mount(f"/{subdir}", StaticFiles(directory=str(sd)), name=subdir)
 
+
+# ── 页面路由 ──
 @app.get("/")
-def health():
+def index():
+    """返回前端首页"""
+    index_path = FRONTED_DIR / "index_hydra.html"
+    if index_path.exists():
+        return FileResponse(index_path)
     return {"status": "running", "model": "Gemma-3-4B-Text2Cypher", "neo4j": _neo4j is not None}
 
 
+@app.get("/health")
+def root_health():
+    """兼容旧版"""
+    return {"status": "running", "model": "Gemma-3-4B-Text2Cypher", "neo4j": _neo4j is not None}
+
+
+# ── 前端 API ──
+@app.get("/api/health")
+def api_health():
+    """健康检查 — 前端期望格式"""
+    examples = [
+        "兰州水文站径流量",
+        "黄河流域用水总量",
+        "龙羊峡水库水位",
+        "黄河流域有哪些水库",
+    ]
+    return {
+        "neo4j": _neo4j is not None,
+        "rag_size": len(examples),
+        "model": "Gemma-3-4B-Text2Cypher",
+    }
+
+
+@app.post("/api/chat")
+def api_chat(req: QueryRequest):
+    """自然语言问答 — 前端期望格式"""
+    import time
+    t0 = time.time()
+    parsed = generate_cypher(req.question)
+    t1 = time.time()
+    cypher = parsed.get("cypher", "")
+    results = execute_cypher(cypher) if cypher else []
+    t2 = time.time()
+
+    answer = format_answer(results, req.question)
+
+    return {
+        "answer": answer,
+        "cypher": cypher,
+        "timing": {
+            "cypher_gen": round(t1 - t0, 2),
+            "neo4j": round(t2 - t1, 2),
+            "total": round(t2 - t0, 2),
+        },
+    }
+
+
+# ── 旧版 API (保留兼容) ──
 @app.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest):
     import time
