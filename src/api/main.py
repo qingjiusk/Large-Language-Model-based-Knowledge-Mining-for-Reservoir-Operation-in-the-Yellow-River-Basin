@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api.dependencies import neo4j_client, graph_query, get_graph_query, success_response
-from src.api.routers import reservoir, hydrology, knowledge
+from src.api.routers import reservoir, hydrology, knowledge, optimization
 from src.common.config_loader import ConfigLoader
 from src.common.logger import get_logger
 from src.knowledge_graph.neo4j_client import Neo4jClient
@@ -66,6 +66,7 @@ app.add_middleware(
 app.include_router(reservoir.router, prefix="/api/reservoir", tags=["水库信息"])
 app.include_router(hydrology.router, prefix="/api/hydrology", tags=["水文数据"])
 app.include_router(knowledge.router, prefix="/api/knowledge", tags=["知识查询"])
+app.include_router(optimization.router, prefix="/api/optimization", tags=["优化调度"])
 
 
 @app.exception_handler(Exception)
