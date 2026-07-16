@@ -1,0 +1,355 @@
+# 三元组规范化改造方案：从抽取到API适配全链路
+下面从**问题诊断 → 整体架构 → Prompt改造 → 代码实现 → API适配**五个维度给出完整落地方案，目标是让抽取的三元组直接对齐后端数据库与API接口，兼顾结构清晰、内容完整和可查询性。
+
+## 一、现有三元组的核心问题
+当前抽取结果属于「原始抽取态」，无法直接支撑图谱查询与API调用，核心问题集中在3层：
+
+### 1. 实体层
+- 命名不统一：简称/全称混用（青海/青海省、兰州站/兰州水文站），无统一标准名
+- 无类型标注：无法区分是水库、水文站、省区还是地下水超采区，无法按类型检索
+- 粒度混乱：「合计/总计」作为实体出现，属于统计聚合项，不是业务实体
+
+### 2. 关系层
+- 命名口语化：「面积为」「供水量流域内为」「年变幅为」等表述无统一标准
+- 时序不规范：年度数据与固有属性混在一起，年份未单独成字段，无法按年份查询
+- 未映射标准ID：没有对齐本体库的关系ID，无法支撑路径查询、约束查询等图谱能力
+
+### 3. 字段层
+- 冗余信息多：`original_relation`、`data_type`、`table_id` 对业务API无价值
+- 关键字段缺失：`year`（数据年份）、`entity_type`（实体类型）、`relation_id`（标准关系ID）
+- 脏数据未清洗：`object` 为 `/`、`1`、`一` 等无效值
+
+## 二、整体改造架构：四层流水线
+目标：输出**符合属性图模型、对齐标准本体、直接适配后端API**的规范三元组。
+
+| 层级 | 能力 | 输入 | 输出 | 依赖资源 |
+|------|------|------|------|----------|
+| 1 | 实体归一化 | 原始实体名 | 标准名 + 实体类型 + 实体ID | alias_dict.json、entity_types.json |
+| 2 | 关系标准化 | 原始关系名+上下文 | 标准relation_id + 是否年度数据 | relation_types.json、本体定义 |
+| 3 | 结构重组 | 原始三元组 + 归一化结果 | 规范三元组（固有属性/年度数据分类） | 后端API接口规范 |
+| 4 | 质量校验 | 规范三元组 | 入库可用的最终数据 + 统计信息 | 实体-关系类型约束规则 |
+
+## 三、Prompt 改造方案
+改造原则：**从抽取源头就输出规范结构**，减少后处理误差；后处理Prompt作为兜底补充。
+
+### 1. 表格抽取Prompt（改造 table_extract.txt）
+直接在抽取阶段对齐标准体系，一次调用完成「抽取+标准化」。
+
+```
+角色：资深黄河水文水资源专家 + 知识图谱构建工程师
+任务：从表格中抽取知识三元组，直接对齐标准实体与关系体系，输出规范结构。
+
+===== 标准资源库 =====
+【实体别名表】
+{alias_dict}
+
+【标准关系体系】
+{standard_relations}
+
+===== 抽取强制规则 =====
+1. 实体规则
+   - subject 必须为独立实体名称，自动匹配标准全称并标注实体类型
+   - 禁止将指标、年份、数量嵌入实体名
+   - 实体类型优先从标准库选择，新增类型需语义准确
+
+2. 关系规则
+   - 必须映射到标准 relation_id，无匹配则填 NEW_RELATION
+   - 年度时序数据（径流量、输沙量、供水量等）year 字段填对应年份
+   - 固有属性（面积、类型、行政归属等）year 字段填 constant
+   - 禁止使用「为/是/有」等无意义泛指词
+
+3. 数值规则
+   - object 保留完整数值+单位
+   - 无效值（/、-、无数据、空值）统一填 null 并标记 confidence=0.3
+
+===== 输入数据 =====
+表格内容：
+{table_markdown}
+文档年份：{doc_year}
+文档来源：{source_file}
+表格上下文：{context}
+
+===== 输出要求 =====
+严格输出 JSON 数组，每个三元组包含字段：
+- subject_name: 标准实体全称
+- subject_type: 实体类型（Reservoir/HydrologicalStation/Province/...）
+- relation_id: 标准关系ID
+- relation_name: 原始关系描述（保留语义）
+- object_value: 数值+单位 或 实体名
+- year: 年份 / constant
+- context: 上下文描述
+- confidence: 置信度0-1
+```
+
+### 2. 关系对齐Prompt（改造 canonicalize.txt）
+用于后处理阶段对存量原始三元组做关系标准化，新增「年度属性标记」和「类型校验」。
+
+```
+角色：黄河流域知识图谱关系本体对齐专家
+任务：将原始关系映射到标准关系体系，标注是否为年度时序数据，输出匹配结果。
+
+标准关系体系：
+{standard_relations}
+
+输入：
+原始关系名：{source_relation}
+上下文描述：{context_text}
+
+输出要求：
+1. 严格JSON格式，包含字段：
+   - match_result: 标准关系ID / "NEW_RELATION"
+   - confidence: 匹配置信度(0-1)
+   - is_annual: 是否为年度时序数据（true/false）
+   - reason: 匹配/不匹配的简短理由
+2. 语义必须高度一致才能匹配，禁止过度泛化
+3. 径流量、输沙量、供水量、用水量、埋深等随年份变化的指标 is_annual=true
+4. 面积、类型、归属、位置等固有属性 is_annual=false
+```
+
+### 3. 实体标准化Prompt（新增）
+用于存量数据的实体消歧与类型标注。
+
+```
+角色：黄河流域知识图谱实体标准化专家
+任务：将输入实体映射到标准实体库，输出标准全称与实体类型。
+
+标准实体别名库：
+{alias_dict}
+
+实体类型定义：
+{entity_types}
+
+输入实体列表：
+{entity_list}
+
+输出要求：
+1. 严格JSON数组，每个元素包含：
+   - original_name: 原始实体名
+   - standard_name: 标准全称
+   - entity_type: 实体类型
+   - is_new: 是否为新增实体（true/false）
+2. 优先精确匹配别名库，无匹配则根据上下文语义推断类型
+3. 新增实体类型命名规范：大驼峰，如 GroundwaterOverdraftArea
+```
+
+## 四、代码实现方案
+基于 Python 实现全流水线，包含「规则引擎 + LLM 兜底」两级处理，高频关系走规则保证效率，低频关系走 LLM 保证覆盖。
+
+### 1. 资源加载与基础配置
+```python
+import json
+from typing import List, Dict
+
+# 加载本体资源
+def load_ontology():
+    with open("alias_dict.json", "r", encoding="utf-8") as f:
+        alias_dict = json.load(f)
+    with open("entity_types.json", "r", encoding="utf-8") as f:
+        entity_types = json.load(f)
+    with open("relation_types.json", "r", encoding="utf-8") as f:
+        relation_types = json.load(f)
+    return alias_dict, entity_types, relation_types
+
+# 构建别名反向映射
+def build_alias_mapping(alias_dict):
+    name_map = {}
+    type_category = {
+        "reservoirs": "Reservoir",
+        "hydrological_stations": "HydrologicalStation",
+        "water_resource_zones": "WaterResourceZone",
+        "provinces": "Province",
+        "rivers": "River"
+    }
+    for category, entities in alias_dict.items():
+        ent_type = type_category[category]
+        for std_name, aliases in entities.items():
+            name_map[std_name] = (std_name, ent_type)
+            for alias in aliases:
+                name_map[alias] = (std_name, ent_type)
+    return name_map
+```
+
+### 2. 实体归一化函数
+```python
+def normalize_entity(entity_name: str, alias_map: Dict) -> Dict:
+    """实体名称标准化 + 类型标注"""
+    # 精确匹配别名库
+    if entity_name in alias_map:
+        std_name, ent_type = alias_map[entity_name]
+        return {
+            "original_name": entity_name,
+            "standard_name": std_name,
+            "entity_type": ent_type,
+            "is_new": False
+        }
+    
+    # 规则推断类型
+    if "水文站" in entity_name:
+        ent_type = "HydrologicalStation"
+    elif "水库" in entity_name:
+        ent_type = "Reservoir"
+    elif "超采区" in entity_name:
+        ent_type = "GroundwaterOverdraftArea"
+    elif entity_name in ["合计", "总计"]:
+        ent_type = "StatisticAggregate"
+    else:
+        ent_type = "Unknown"
+    
+    return {
+        "original_name": entity_name,
+        "standard_name": entity_name,
+        "entity_type": ent_type,
+        "is_new": True
+    }
+```
+
+### 3. 关系标准化函数
+```python
+# 高频关系规则映射（可扩展）
+RELATION_RULES = {
+    "实测径流量为": ("ANNUAL_RUNOFF", True),
+    "当年天然河川径流量为": ("ANNUAL_RUNOFF", True),
+    "当年实测输沙量为": ("ANNUAL_SEDIMENT", True),
+    "与上年比较变化为": ("ANNUAL_SEDIMENT", True),
+    "面积为": ("HAS_AREA", False),
+    "供水量合计为": ("WATER_SUPPLY", True),
+    "用水量合计总量为": ("WATER_USE", True),
+    "耗水量合计总量为": ("WATER_CONSUMPTION", True),
+    "所属水资源二级区为": ("LOCATED_IN_ZONE", False),
+    "所属行政区为": ("BELONGS_TO_PROVINCE", False),
+    "平均地下水埋深年初": ("GROUNDWATER_DEPTH_START", True),
+    "平均地下水埋深年末": ("GROUNDWATER_DEPTH_END", True),
+    "平均地下水埋深年变幅": ("GROUNDWATER_DEPTH_CHANGE", True),
+}
+
+def canonicalize_relation(source_rel: str, context: str = "") -> Dict:
+    """关系标准化：规则优先，LLM兜底"""
+    # 规则精确匹配
+    if source_rel in RELATION_RULES:
+        rel_id, is_annual = RELATION_RULES[source_rel]
+        return {
+            "match_result": rel_id,
+            "confidence": 0.99,
+            "is_annual": is_annual,
+            "reason": "规则精确匹配标准关系定义"
+        }
+    
+    # 关键词模糊匹配
+    if "径流量" in source_rel:
+        return {"match_result": "ANNUAL_RUNOFF", "confidence": 0.9, "is_annual": True, "reason": "径流指标，属于年度水文数据"}
+    if "输沙量" in source_rel:
+        return {"match_result": "ANNUAL_SEDIMENT", "confidence": 0.9, "is_annual": True, "reason": "输沙指标，属于年度水文数据"}
+    if "供水量" in source_rel:
+        return {"match_result": "WATER_SUPPLY", "confidence": 0.9, "is_annual": True, "reason": "供水指标，属于年度用水数据"}
+    if "用水量" in source_rel:
+        return {"match_result": "WATER_USE", "confidence": 0.9, "is_annual": True, "reason": "用水指标，属于年度用水数据"}
+    
+    # 兜底：调用LLM执行对齐Prompt（实际项目中接入LLM接口）
+    # llm_res = call_llm(canonicalize_prompt)
+    return {"match_result": "NEW_RELATION", "confidence": 0.5, "is_annual": False, "reason": "无匹配标准关系，标记为新增"}
+```
+
+### 4. 三元组结构重组 + 脏数据清洗
+```python
+def restructure_triplet(raw: Dict, subj_info: Dict, rel_info: Dict, doc_year: str) -> Dict:
+    """转换为规范三元组结构，适配API与图谱存储"""
+    # 清洗脏数据
+    obj_val = str(raw.get("object", "")).strip()
+    invalid_values = {"/", "1", "一", "|", "", "null"}
+    is_valid = obj_val not in invalid_values
+    
+    # 确定年份
+    year = doc_year if rel_info["is_annual"] else "constant"
+    
+    # 推断客体类型
+    obj_type = "numerical_value" if any(u in obj_val for u in ["亿立方米", "米", "平方公里", "亿吨", "%"]) else "string"
+    if rel_info["match_result"] in ["LOCATED_IN_ZONE", "BELONGS_TO_PROVINCE"]:
+        obj_type = "entity"
+    
+    # 计算综合置信度
+    confidence = float(raw.get("confidence", 0.8)) * float(rel_info["confidence"])
+    
+    return {
+        "subject_name": subj_info["standard_name"],
+        "subject_type": subj_info["entity_type"],
+        "relation_id": rel_info["match_result"],
+        "relation_name": raw["relation"],
+        "object_value": obj_val if is_valid else None,
+        "object_type": obj_type,
+        "year": year,
+        "source_file": raw.get("source_file", ""),
+        "context": raw.get("context", ""),
+        "confidence": round(confidence, 3),
+        "is_valid": is_valid
+    }
+```
+
+### 5. 批量处理主流程
+```python
+def process_batch(raw_triplets: List[Dict], doc_year: str = "2024") -> List[Dict]:
+    alias_dict, entity_types, relation_types = load_ontology()
+    alias_map = build_alias_mapping(alias_dict)
+    results = []
+    
+    for raw in raw_triplets:
+        # 1. 实体归一化
+        subj_info = normalize_entity(raw["subject"], alias_map)
+        # 2. 关系标准化
+        rel_info = canonicalize_relation(raw["relation"], raw.get("context", ""))
+        # 3. 结构重组
+        std_triplet = restructure_triplet(raw, subj_info, rel_info, doc_year)
+        # 只保留有效数据
+        if std_triplet["is_valid"]:
+            results.append(std_triplet)
+    
+    return results
+
+if __name__ == "__main__":
+    # 加载原始抽取结果
+    with open("raw_triplets.json", "r", encoding="utf-8") as f:
+        raw_data = json.load(f)
+    
+    # 批量规范化
+    standardized = process_batch(raw_data, doc_year="2024")
+    
+    # 保存最终结果
+    with open("standardized_triplets.json", "w", encoding="utf-8") as f:
+        json.dump(standardized, f, ensure_ascii=False, indent=2)
+    
+    # 生成统计信息（对应 /api/knowledge/stats）
+    stats = {
+        "total_valid": len(standardized),
+        "entity_type_dist": {},
+        "relation_id_dist": {},
+        "annual_data_count": sum(1 for t in standardized if t["year"] != "constant"),
+        "constant_attr_count": sum(1 for t in standardized if t["year"] == "constant")
+    }
+    for t in standardized:
+        stats["entity_type_dist"][t["subject_type"]] = stats["entity_type_dist"].get(t["subject_type"], 0) + 1
+        stats["relation_id_dist"][t["relation_id"]] = stats["relation_id_dist"].get(t["relation_id"], 0) + 1
+    
+    print("处理完成，统计概览：")
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+```
+
+## 五、与后端API的适配映射
+规范后的三元组可直接支撑所有接口，对应关系如下：
+
+| API 接口 | 三元组查询逻辑 |
+|---------|--------------|
+| `/api/reservoir/list` | 过滤 `subject_type=Reservoir`，按 `subject_name` 去重 |
+| `/api/reservoir/{id}` | 查询 `subject_id=id` 且 `year=constant` 的所有属性三元组 |
+| `/api/reservoir/{id}/rules` | 查询 `subject_id=id` 且 `relation_id=HAS_DISPATCH_RULE` 的三元组 |
+| `/api/hydrology/station/{id}/data?year=2024` | 查询 `subject_id=id` 且 `year=2024` 的所有水文指标三元组 |
+| `/api/knowledge/search?q=xxx` | 全文检索 `subject_name/relation_name/object_value` 匹配项 |
+| `/api/knowledge/trace?doc=xxx` | 按 `source_file` 过滤所有三元组 |
+| `/api/knowledge/path` | 基于 `relation_id` 做图遍历，计算实体间路径 |
+| `/api/optimization/parameters` | 提取水库实体的 `TOTAL_CAPACITY`、`NORMAL_STORAGE_LEVEL` 等固有属性 |
+
+### 落地建议
+1. **实体ID化**：入库前为每个唯一实体分配自增ID或雪花ID，三元组中存储 `subject_id` 替代名称，提升查询效率。
+2. **年度数据聚合**：同一实体同一年的多个指标可聚合为一条年度数据记录，优化 `/hydrology/station/{id}/data` 接口性能。
+3. **新增关系迭代**：标记为 `NEW_RELATION` 的关系定期人工审核，补充进 `relation_types.json`，持续完善本体。
+4. **置信度过滤**：API 默认返回置信度>0.7的三元组，低置信度数据留作后台审核。
+
+需要我帮你把现有原始三元组批量转换成上述规范结构，或者补充生成地下水超采区的实体类型定义吗？

@@ -7,8 +7,14 @@
 3. object 保留完整数值+单位
 4. 禁止使用无意义泛指词（如"为""是""有"）
 
-反例：{{"subject": "兰州水文站径流量", "relation": "为", "object": "362.80"}}
-正例：{{"subject": "兰州水文站", "relation": "2024年实测径流量为", "object": "362.80亿立方米", "context": "...", "confidence": 0.99}}
+年份识别规则：
+- 表格通常为年度统计表，从表格标题或上下文推断年份
+- 恒定属性（如水库特征参数）year 填 "constant"
+- 年度统计数据 year 填具体年份数字，如 2024
+- year 字段只填年份数字或 "constant"
+
+反例：{{"subject": "兰州水文站径流量", "relation": "为", "object": "362.80", "year": "constant"}}
+正例：{{"subject": "兰州水文站", "relation": "2024年实测径流量为", "object": "362.80亿立方米", "context": "兰州站2024年实测径流量362.80亿m³", "confidence": 0.99, "year": 2024}}
 
 输出格式：
 {{
@@ -20,8 +26,9 @@
           "subject": "兰州水文站",
           "relation": "2024年实测径流量为",
           "object": "362.80亿立方米",
-          "context": "黄河干流主要水文站实测径流量表",
-          "confidence": 0.99
+          "context": "黄河干流主要水文站实测径流量表 - 兰州站",
+          "confidence": 0.99,
+          "year": 2024
         }}
       ]
     }}

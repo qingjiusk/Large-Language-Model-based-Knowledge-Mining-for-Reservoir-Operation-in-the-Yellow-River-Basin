@@ -3,9 +3,14 @@
 基于 EDC（Extract-Define-Canonicalize）框架，使用 **DeepSeek API** + **PaddleOCR (PP-StructureV3)** 从《黄河水资源公报》等官方 PDF 和图片中自动提取水文知识，构建 Neo4j 知识图谱，提供 **RESTful API** 和 **自然语言查询**。
 
 ```
-PDF/PNG → PaddleOCR (PP-StructureV3) → 文本清洗 → LLM 批量抽取 → 语义定义 → 关系标准化 → 知识融合 → Neo4j
-                                                                                              ↓
-                                                            用户 ← 自然语言查询 ← Gemma 3 4B Text2Cypher (llama-cpp, GPU)
+PDF/PNG → PaddleOCR (PP-StructureV3) → 文本清洗 → LLM 批量抽取 (含year)
+    ↓
+三元组规范化 (实体对齐 + 关系映射 + 对象分类 + 年份补全 + 复合拆分 + 去重)
+    ↓
+Neo4j (干净ID, 中文关系类型, 标准relation_id, year, 无R_前缀)
+    ↓
+用户 ← 自然语言查询 ← Gemma 3 4B Text2Cypher (llama-cpp, GPU)
+用户 ← 优化数据接口 ← OptimizationFormatter
 ```
 
 ---
@@ -49,7 +54,13 @@ cp .env.example .env
 # 6. 运行全链路 (~8 min)
 python scripts/build_kg_from_dir.py
 
-# 7. 启动主 API
+# 7. 规范化三元组（实体对齐 + 关系映射 + 年份补全 + 脏数据清洗）
+python scripts/normalize_triplets.py
+
+# 8. 重建知识图谱（干净 ID + 完整元数据）
+python scripts/rebuild_kg.py --mode full
+
+# 9. 启动主 API
 uvicorn src.api.main:app --reload
 # 访问 http://127.0.0.1:8000/docs
 ```
@@ -92,14 +103,16 @@ HydroBrain/
 │
 ├── prompts/
 │   ├── extract.txt                 # 单 chunk 三元组抽取
-│   ├── extract_batch.txt           # 批量 chunk 三元组抽取
+│   ├── extract_batch.txt           # 批量 chunk 三元组抽取 (含 year 字段)
 │   ├── table_extract.txt           # 单表格三元组抽取
-│   ├── table_extract_batch.txt     # 批量表格三元组抽取
+│   ├── table_extract_batch.txt     # 批量表格三元组抽取 (含 year 字段)
 │   ├── define.txt                  # 关系语义定义
 │   └── canonicalize.txt            # 关系标准化
 │
 ├── scripts/
 │   ├── build_kg_from_dir.py        # 全链路构建脚本（PDF + 图片）
+│   ├── normalize_triplets.py       # 三元组规范化（实体对齐+关系映射+年份+清洗）
+│   ├── rebuild_kg.py               # 从规范化三元组重建 Neo4j 图谱
 │   ├── query_server.py             # 自然语言查询服务 (:8001)
 │   ├── parse_pdfs_batch.py         # 批量 PDF 解析
 │   └── extract_tables_batch.py     # 文本型 PDF 表格提取 (pdfplumber)
@@ -108,7 +121,7 @@ HydroBrain/
 │   ├── common/                     # ConfigLoader, Logger
 │   ├── document_processing/        # PDF解析 + 图片解析 + PaddleOCR + Tesseract兜底
 │   ├── llm_pipeline/               # DeepSeek Client + Extract/Define/Canonicalize
-│   ├── knowledge_fusion/           # 实体链接 + 冲突检测
+│   ├── knowledge_fusion/           # 实体链接 + 冲突检测 + 三元组规范化
 │   ├── knowledge_graph/            # Neo4j 客户端 + 图谱构建 + 查询 + 优化格式化
 │   └── api/                        # FastAPI 服务 + 路由
 │
@@ -141,23 +154,44 @@ HydroBrain/
 | LLM 抽取 | 批量模式 (batch_size=4, max_tokens=32768) |
 | 文本三元组 | **360** |
 | 表格三元组 | **489** |
-| 总三元组 | **849** (+57% vs Tesseract) |
+| 总三元组 | **1,257** (含二期增量数据) |
 | 冲突解决 | 89 |
 | LLM API 调用 | ~17 次 (vs 50+ 次逐个抽取) |
 
-### Neo4j 知识图谱
+### 三元组规范化结果
+
+经过 `normalize_triplets.py` 处理后的统计：
+
+| 指标 | 数值 |
+|------|------|
+| 规范化输出 | **1,034** 条 (去重 228 条冗余) |
+| 关系匹配率 | **98.1%** (精确 1,080 + 关键词 153 / 1,257) |
+| 实体标准化 | 949 条匹配标准别名库 |
+| 新实体类型 | 308 条（地下水超采区、平原盆地等） |
+| 年份分布 | 2024=812, constant=345, 2023=105 |
+| 复合拆分 | +34 条 (split comma-separated entities) |
+| 脏数据丢弃 | -29 条 |
+| **去重** | **-228 条** (同subject+同year+同value的不同relation合并，保留含年份版本) |
+
+### Neo4j 知识图谱（重建后）
 
 | 节点类型 | 数量 |
 |---------|------|
-| AnnualHydrologyData | 493 |
-| Constraint | 111 |
-| Province | 55 |
-| River | 32 |
-| WaterResourceZone | 27 |
-| HydrologicalStation | 25 |
-| Reservoir | 22 |
+| AnnualHydrologyData | 605 |
+| Constraint | 265 |
+| GroundwaterOverdraftArea | 61 |
+| HydrologicalStation | 36 |
+| GroundwaterRegion | 25 |
+| Province | 22 |
+| WaterResourceZone | 9 |
+| Reservoir | 17 |
+| River | 13 |
+| StatisticAggregate | 3 |
 | Document | 1 |
-| **总计** | **766 节点, 739 关系** |
+| **总计** | **993 节点, 1,034 关系** |
+
+节点 ID 示例：`Reservoir_d45931c6`（干净、无中文）
+关系类型：保留中文原名，使用反引号包裹（如 `` `2024年实测径流量为` ``），无需 R_ 前缀
 
 抽取示例：
 ```
@@ -166,6 +200,25 @@ HydroBrain/
 [黄河流域] --[总面积]--> [79.58万平方公里]
 [黄河干流] --[全长]--> [5464公里]
 ```
+
+### 规范三元组 Schema
+
+每条三元组经规范化后包含 10 个字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `subject` | string | 标准实体全名（经别名匹配后） |
+| `subject_type` | enum | 10 种之一：Reservoir / HydrologicalStation / WaterResourceZone / Province / River / AnnualHydrologyData / Constraint / DispatchRule / GroundwaterOverdraftArea / GroundwaterRegion / StatisticAggregate |
+| `relation` | string | 保留的中文关系原文 |
+| `relation_id` | string | 标准关系 ID（48 种，如 `ANNUAL_RUNOFF`），无匹配则为 null |
+| `object` | string | 数值+单位 或 标准实体名 |
+| `object_type` | enum | `numerical_value` / `entity_reference` / `composite`（多值拆分） |
+| `year` | int / "constant" | 数据年份；恒定属性为 "constant" |
+| `context` | string | 原文片段（溯源） |
+| `confidence` | float | 综合置信度（抽取 × 标准化） |
+| `source_file` | string | 来源文件名 |
+
+已移除的冗余字段：`chunk_id`, `page_num`, `data_type`, `original_relation`
 
 ### 三元组质量保障
 
@@ -177,6 +230,58 @@ HydroBrain/
 | 数值完整 | object 保留完整数值+单位（如 `362.80亿立方米`） |
 
 **效果**: 中文关系保留率 100%，subject 含指标比例 < 0.5%。
+
+### 数据质量保障
+
+| 规则 | 说明 |
+|------|------|
+| 实体去重 | subject/object 经 EntityLinker 别名匹配统一为全称（如"花园口"→"花园口水文站"） |
+| 关系去重 | 同 subject+year+value 的多条关系合并为一条，保留含显式年份的版本（-228 条冗余） |
+| 类型校验 | object 标签优先按名称关键词推断（"水文站"→HydrologicalStation），不再因宽泛关系类型误分类 |
+| 反引号关系 | Neo4j 关系类型用 `` ` `` 包裹保留中文原名，无 `R_` 前缀 |
+
+---
+
+## 三元组规范化管道
+
+将 LLM 抽取的原始三元组转换为可直接入库的标准格式，全规则驱动（零额外 API 调用）。
+
+### 管道流程
+
+```
+原始三元组 → EntityLinker (别名匹配 + 类型标注)
+           → RelationStandardizer (精确规则 → 关键词匹配 → LLM兜底)
+           → YearExtractor (从relation提取年份, 排除基准期范围)
+           → ObjectClassifier (数值 / 实体引用 / 复合)
+           → SchemaMapper (映射到规范字段, 剔除冗余)
+           → MultiValueSplitter (拆分顿号/逗号分隔的复合object)
+           → 规范三元组
+```
+
+### 核心指标
+
+| 指标 | 数值 |
+|------|------|
+| 关系精确匹配规则 | 95 条（覆盖径流/输沙/降水/供水/用水/耗水/蓄水/地下水/固有属性） |
+| 关键词模糊规则 | 18 组（兜底未精确匹配的关系） |
+| 标准关系类型 | 48 个（地理属性/空间关系/水文数据/用水数据/地下水数据/比较数据/溯源） |
+| 实体别名 | 241 条（水库 18 + 水文站 24 + 水资源分区 8 + 省级 10 + 河流 16） |
+| 关系匹配率 | **98.1%**（规则驱动，余下为低频专有术语） |
+
+### 用法
+
+```bash
+# 对存量三元组做规范化
+python scripts/normalize_triplets.py
+
+# 仅看统计，不输出文件
+python scripts/normalize_triplets.py --stats-only
+
+# 从规范化三元组重建 Neo4j 图谱
+python scripts/rebuild_kg.py --mode full     # 全量重建
+python scripts/rebuild_kg.py --mode append   # 增量追加
+python scripts/rebuild_kg.py --dry-run       # 仅验证，不写库
+```
 
 ---
 

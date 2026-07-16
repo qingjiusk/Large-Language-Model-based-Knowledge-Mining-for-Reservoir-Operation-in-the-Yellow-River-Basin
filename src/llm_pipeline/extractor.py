@@ -245,6 +245,7 @@ class TripletExtractor:
             t.setdefault("context", "")
             t.setdefault("confidence", 0.5)
             t.setdefault("data_type", "text")
+            t.setdefault("year", None)  # 新增：年份字段，None 表示 LLM 未提供
             valid.append(t)
 
         return valid

@@ -268,9 +268,7 @@ class GraphBuilder:
         return "Constraint"
 
     def _generate_id(self, label: str, name: str) -> str:
-        """生成节点唯一 ID"""
-        # 简单规则：标签前缀 + 名称哈希
+        """生成节点唯一 ID — 不含中文，仅 {Label}_{hash}"""
         import hashlib
         hash_suffix = hashlib.md5(f"{label}:{name}".encode()).hexdigest()[:8]
-        safe_name = re.sub(r'[^\w一-鿿]', '_', name)[:30]
-        return f"{label}_{safe_name}_{hash_suffix}"
+        return f"{label}_{hash_suffix}"

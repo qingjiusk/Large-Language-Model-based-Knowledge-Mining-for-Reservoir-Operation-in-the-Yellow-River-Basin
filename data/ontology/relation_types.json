@@ -11,11 +11,29 @@
     "object_type": "WaterResourceZone",
     "category": "空间关系"
   },
+  "LOCATED_IN_PLAIN": {
+    "description": "[地下水超采区] 位于 [平原/盆地]",
+    "subject_type": "GroundwaterOverdraftArea",
+    "object_type": "GroundwaterRegion",
+    "category": "空间关系"
+  },
   "BELONGS_TO_PROVINCE": {
-    "description": "[水库/水文站] 位于 [省级行政区] 境内",
-    "subject_type": "Reservoir/HydrologicalStation",
+    "description": "[水库/水文站/超采区] 位于 [省级行政区] 境内",
+    "subject_type": "Reservoir/HydrologicalStation/GroundwaterOverdraftArea",
     "object_type": "Province",
     "category": "行政归属"
+  },
+  "BELONGS_TO": {
+    "description": "[实体] 属于 [上级实体]",
+    "subject_type": "Any",
+    "object_type": "Any",
+    "category": "归属关系"
+  },
+  "INCLUDES": {
+    "description": "[流域/行政区] 包含 [子区域/实体]",
+    "subject_type": "River/Province/WaterResourceZone",
+    "object_type": "WaterResourceZone/HydrologicalStation/Reservoir",
+    "category": "空间关系"
   },
   "IS_TRIBUTARY_OF": {
     "description": "[支流] 是 [干流] 的支流",
@@ -29,6 +47,44 @@
     "object_type": "River",
     "category": "监测关系"
   },
+  "HAS_STATION": {
+    "description": "[河流] 设有水文站 [水文站]",
+    "subject_type": "River",
+    "object_type": "HydrologicalStation",
+    "category": "监测关系"
+  },
+  "STATION_RENAMED_TO": {
+    "description": "[水文站] 更名为 [新名称]",
+    "subject_type": "HydrologicalStation",
+    "object_type": "HydrologicalStation",
+    "category": "变更事件"
+  },
+
+  "HAS_AREA": {
+    "description": "[实体] 面积为 [面积值]",
+    "subject_type": "Any",
+    "object_type": "面积数值",
+    "category": "地理属性"
+  },
+  "RIVER_LENGTH": {
+    "description": "[河流] 的全长为 [长度值]",
+    "subject_type": "River",
+    "object_type": "长度数值",
+    "category": "地理属性"
+  },
+  "BASIN_AREA": {
+    "description": "[流域/水文站] 的控制/流域面积为 [面积值]",
+    "subject_type": "River/WaterResourceZone/HydrologicalStation",
+    "object_type": "面积数值",
+    "category": "地理属性"
+  },
+  "GROUNDWATER_TYPE": {
+    "description": "[地下水超采区] 的地下水类型为 [类型名称]",
+    "subject_type": "GroundwaterOverdraftArea",
+    "object_type": "地下水类型名称",
+    "category": "地质属性"
+  },
+
   "HAS_ANNUAL_DATA": {
     "description": "[水库/水文站/分区] 在某年度有 [年度水文数据]",
     "subject_type": "Reservoir/HydrologicalStation/WaterResourceZone",
@@ -47,6 +103,13 @@
     "object_type": "Constraint",
     "category": "约束关联"
   },
+  "HAS_OVERDRAFT_ZONE": {
+    "description": "[平原/盆地] 包含地下水超采区 [超采区序号]",
+    "subject_type": "GroundwaterRegion",
+    "object_type": "GroundwaterOverdraftArea",
+    "category": "空间关系"
+  },
+
   "FLOOD_CONTROL_LEVEL": {
     "description": "[水库] 的汛期防洪限制水位为 [水位值]",
     "subject_type": "Reservoir",
@@ -71,8 +134,46 @@
     "object_type": "库容数值",
     "category": "库容参数"
   },
+  "FLOOD_CONTROL_CAPACITY": {
+    "description": "[水库] 的防洪库容为 [容量值]",
+    "subject_type": "Reservoir",
+    "object_type": "库容数值",
+    "category": "库容参数"
+  },
+
+  "RESERVOIR_STORAGE_START": {
+    "description": "[水库] 在年初的蓄水量为 [水量值]",
+    "subject_type": "Reservoir",
+    "object_type": "蓄水量数值",
+    "category": "水库运行数据"
+  },
+  "RESERVOIR_STORAGE_END": {
+    "description": "[水库] 在年末的蓄水量为 [水量值]",
+    "subject_type": "Reservoir",
+    "object_type": "蓄水量数值",
+    "category": "水库运行数据"
+  },
+  "RESERVOIR_STORAGE_CHANGE": {
+    "description": "[水库] 年蓄水变量为 [变化值]",
+    "subject_type": "Reservoir",
+    "object_type": "蓄水量变化值",
+    "category": "水库运行数据"
+  },
+  "RESERVOIR_STORAGE": {
+    "description": "[水库] 蓄水量数据",
+    "subject_type": "Reservoir",
+    "object_type": "蓄水量数值",
+    "category": "水库运行数据"
+  },
+
   "ANNUAL_RUNOFF": {
     "description": "[水文站/河流] 在某年实测径流量为 [水量值]",
+    "subject_type": "HydrologicalStation/River",
+    "object_type": "径流量数值",
+    "category": "水文数据"
+  },
+  "ANNUAL_RUNOFF_FLOOD_SEASON": {
+    "description": "[水文站/河流] 在某年汛期(7~10月)径流量为 [水量值]",
     "subject_type": "HydrologicalStation/River",
     "object_type": "径流量数值",
     "category": "水文数据"
@@ -89,6 +190,37 @@
     "object_type": "降水量数值",
     "category": "水文数据"
   },
+  "LONG_TERM_AVG_RUNOFF": {
+    "description": "[水文站/河流] 多年平均径流量为 [水量值]",
+    "subject_type": "HydrologicalStation/River",
+    "object_type": "径流量数值",
+    "category": "水文基准"
+  },
+  "LONG_TERM_AVG_PRECIPITATION": {
+    "description": "[水资源分区/省区] 多年平均降水量为 [降水量值]",
+    "subject_type": "WaterResourceZone/Province",
+    "object_type": "降水量数值",
+    "category": "水文基准"
+  },
+  "COMPARE_LAST_YEAR": {
+    "description": "[水文站/区域] 某年数据与上年比较变化 [变化值/趋势]",
+    "subject_type": "HydrologicalStation/WaterResourceZone",
+    "object_type": "比较数值/趋势描述",
+    "category": "比较数据"
+  },
+  "COMPARE_LONG_TERM_AVG": {
+    "description": "[水文站/区域] 某年数据与多年均值比较 [偏差值/趋势]",
+    "subject_type": "HydrologicalStation/WaterResourceZone",
+    "object_type": "比较数值/趋势描述",
+    "category": "比较数据"
+  },
+  "COMPARISON": {
+    "description": "[实体] 某指标与基准比较 [偏差]",
+    "subject_type": "Any",
+    "object_type": "比较结果",
+    "category": "比较数据"
+  },
+
   "WATER_SUPPLY": {
     "description": "[省区/分区] 在某年供水量为 [供水量值]",
     "subject_type": "Province/WaterResourceZone",
@@ -101,10 +233,86 @@
     "object_type": "用水量数值",
     "category": "用水数据"
   },
+  "WATER_CONSUMPTION": {
+    "description": "[省区/分区] 在某年耗水量为 [耗水量值]",
+    "subject_type": "Province/WaterResourceZone",
+    "object_type": "耗水量数值",
+    "category": "用水数据"
+  },
+
+  "GROUNDWATER_DEPTH": {
+    "description": "[区域] 地下水埋深数据",
+    "subject_type": "Province/WaterResourceZone/GroundwaterRegion",
+    "object_type": "深度数值",
+    "category": "地下水数据"
+  },
+  "GROUNDWATER_DEPTH_START": {
+    "description": "[区域] 年初地下水埋深为 [深度值]",
+    "subject_type": "Province/WaterResourceZone/GroundwaterRegion",
+    "object_type": "深度数值",
+    "category": "地下水数据"
+  },
+  "GROUNDWATER_DEPTH_END": {
+    "description": "[区域] 年末地下水埋深为 [深度值]",
+    "subject_type": "Province/WaterResourceZone/GroundwaterRegion",
+    "object_type": "深度数值",
+    "category": "地下水数据"
+  },
+  "GROUNDWATER_DEPTH_CHANGE": {
+    "description": "[区域] 地下水埋深年变幅为 [变幅值]",
+    "subject_type": "Province/WaterResourceZone/GroundwaterRegion",
+    "object_type": "变幅数值",
+    "category": "地下水数据"
+  },
+
+  "WATER_QUALITY": {
+    "description": "[河流/水库] 某时期水质类别为 [水质等级]",
+    "subject_type": "River/Reservoir",
+    "object_type": "水质等级",
+    "category": "水质数据"
+  },
+  "POWER_GENERATION": {
+    "description": "[水库/水电站] 发电量/出力为 [电量值]",
+    "subject_type": "Reservoir",
+    "object_type": "电量数值",
+    "category": "发电数据"
+  },
+  "ECOLOGICAL_FLOW": {
+    "description": "[河流/断面] 生态流量要求为 [流量值]",
+    "subject_type": "River/HydrologicalStation",
+    "object_type": "流量数值",
+    "category": "生态数据"
+  },
+
   "SOURCE_FROM": {
     "description": "[知识三元组] 来源自 [文档]",
     "subject_type": "Triplet",
     "object_type": "Document",
     "category": "溯源关系"
+  },
+
+  "WATER_RESOURCE_TOTAL": {
+    "description": "[流域/分区] 在某年水资源总量为 [水量值]",
+    "subject_type": "River/WaterResourceZone",
+    "object_type": "水量数值",
+    "category": "水文数据"
+  },
+  "ANNUAL_RUNOFF_TO_SEA": {
+    "description": "[河流] 在某年入海水量为 [水量值]",
+    "subject_type": "River",
+    "object_type": "水量数值",
+    "category": "水文数据"
+  },
+  "GW_LEVEL_RISE_AREA": {
+    "description": "[区域] 地下水水位上升面积为 [面积值]",
+    "subject_type": "Province/WaterResourceZone",
+    "object_type": "面积数值",
+    "category": "地下水数据"
+  },
+  "GW_LEVEL_DECLINE_AREA": {
+    "description": "[区域] 地下水水位下降面积为 [面积值]",
+    "subject_type": "Province/WaterResourceZone",
+    "object_type": "面积数值",
+    "category": "地下水数据"
   }
 }

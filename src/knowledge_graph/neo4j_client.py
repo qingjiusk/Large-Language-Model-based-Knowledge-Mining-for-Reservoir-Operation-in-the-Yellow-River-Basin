@@ -27,6 +27,10 @@ class Neo4jClient:
     CREATE CONSTRAINT doc_id_unique IF NOT EXISTS FOR (n:Document) REQUIRE (n.id) IS UNIQUE;
     CREATE CONSTRAINT rule_id_unique IF NOT EXISTS FOR (n:DispatchRule) REQUIRE (n.id) IS UNIQUE;
     CREATE CONSTRAINT data_id_unique IF NOT EXISTS FOR (n:AnnualHydrologyData) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT constraint_id_unique IF NOT EXISTS FOR (n:Constraint) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT gwoverdraft_id_unique IF NOT EXISTS FOR (n:GroundwaterOverdraftArea) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT gwregion_id_unique IF NOT EXISTS FOR (n:GroundwaterRegion) REQUIRE (n.id) IS UNIQUE;
+    CREATE CONSTRAINT statagg_id_unique IF NOT EXISTS FOR (n:StatisticAggregate) REQUIRE (n.id) IS UNIQUE;
 
     // 检索索引
     CREATE INDEX reservoir_name_idx IF NOT EXISTS FOR (n:Reservoir) ON (n.name);
@@ -205,13 +209,13 @@ class Neo4jClient:
         Args:
             subject_label: 主体节点标签
             subject_id: 主体节点 ID
-            relation_type: 关系类型
+            relation_type: 关系类型（直接用原名，反引号包裹支持中文/数字开头）
             object_label: 客体节点标签
             object_id: 客体节点 ID
             properties: 关系属性
         """
-        # 关系类型需要全大写且不含特殊字符
-        rel_type = self._sanitize_rel_type(relation_type)
+        # 用反引号包裹关系类型，支持中文和数字开头，无需 R_ 前缀
+        safe_rel = f"`{relation_type}`"
 
         props_str = ""
         if properties:
@@ -221,7 +225,7 @@ class Neo4jClient:
         query = f"""
         MATCH (a:{subject_label} {{id: $subject_id}})
         MATCH (b:{object_label} {{id: $object_id}})
-        MERGE (a)-[r:{rel_type}]->(b)
+        MERGE (a)-[r:{safe_rel}]->(b)
         SET r += {props_str or '{}'}
         RETURN r
         """
@@ -273,20 +277,8 @@ class Neo4jClient:
     # ==================== 工具方法 ====================
 
     def _sanitize_rel_type(self, name: str) -> str:
-        """
-        将中文关系名或带空格的名称标准化为 Neo4j 关系类型
-        例: "汛期限制水位" -> "FLOOD_CONTROL_LEVEL"
-        如果已是标准大写格式则直接返回
-        """
-        # 如果已经是大写字母+下划线格式，直接返回
-        import re
-        if re.match(r'^[A-Z][A-Z_]*[A-Z]$', name):
-            return name
-        # Neo4j 关系类型必须以字母/中文开头，不能以数字开头
-        sanitized = re.sub(r'[^\w一-鿿]', '_', name)
-        if sanitized and sanitized[0].isdigit():
-            sanitized = 'R_' + sanitized
-        return sanitized
+        """已废弃：现在用反引号包裹关系类型 (e.g. `2024年实测径流量为`)，无需清洗"""
+        return name
 
     def delete_all(self, confirm: bool = False):
         """清空数据库（危险操作）"""

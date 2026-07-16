@@ -38,21 +38,33 @@ SCHEMA_CONTEXT = """
 - Document (文档): id, name, year, type
 
 ### 节点数量
-Reservoir 13个, HydrologicalStation 14个, WaterResourceZone 15个, Province 70个, River 20个, AnnualHydrologyData 710个, Constraint 155个
+Reservoir 18个, HydrologicalStation 38个, WaterResourceZone 21个, Province 22个, River 15个, AnnualHydrologyData 626个, Constraint 267个
 
 ### 关系
 所有关系类型都是 LLM 抽取的中文短语，如 "2024年实测径流量为" "天然河川径流量为" "用水总量为" "流域总面积为"
 查询时使用 type(r) CONTAINS '关键词' 模糊匹配
 
+### 年份过滤（重要！）
+- AnnualHydrologyData 节点有 d.year 属性（如 "2024", "2023"）
+- 关系也有 r.year 属性
+- 查询特定年份数据时，用 d.year 或 r.year 过滤比用 type(r) CONTAINS '2024' 更准确
+- 示例: WHERE d.year = '2024' AND type(r) CONTAINS '径流'
+
 ### 示例问题 → Cypher
 Q: 兰州2024年径流量
-A: MATCH (s)-[r]->(d) WHERE s.name CONTAINS '兰州' AND type(r) CONTAINS '径流量' RETURN s.name, type(r), d.value, d.unit LIMIT 20
+A: MATCH (s)-[r]->(d) WHERE s.name CONTAINS '兰州' AND type(r) CONTAINS '径流' AND d.year = '2024' RETURN s.name AS 实体, type(r) AS 指标, d.value AS 数值 LIMIT 20
+
+Q: 龙羊峡2024年和2023年的蓄水量
+A: MATCH (s)-[r]->(d:AnnualHydrologyData) WHERE s.name CONTAINS '龙羊峡' AND type(r) CONTAINS '蓄水' AND d.year IN ['2024', '2023'] RETURN s.name AS 实体, type(r) AS 指标, d.value AS 数值, d.year AS 年份 ORDER BY d.year DESC LIMIT 20
+
+Q: 兰州水文站各年径流量
+A: MATCH (s)-[r]->(d:AnnualHydrologyData) WHERE s.name CONTAINS '兰州' AND type(r) CONTAINS '径流' RETURN s.name AS 实体, type(r) AS 指标, d.value AS 数值, d.year AS 年份 ORDER BY d.year DESC LIMIT 20
 
 Q: 黄河流域有哪些水库
 A: MATCH (r:Reservoir) RETURN r.name, r.river, r.location LIMIT 20
 
-Q: 各分区降水量
-A: MATCH (z:WaterResourceZone)-[r]->(d) WHERE type(r) CONTAINS '降水' RETURN z.name, type(r), d.value, d.unit, d.year LIMIT 20
+Q: 各分区2024年降水量
+A: MATCH (z:WaterResourceZone)-[r]->(d) WHERE type(r) CONTAINS '降水' AND d.year = '2024' RETURN z.name, type(r), d.value, d.unit LIMIT 20
 
 Q: 花园口以下用水量
 A: MATCH (s)-[r]->(d) WHERE s.name CONTAINS '花园口以下' AND type(r) CONTAINS '用水' RETURN s.name, type(r), d.value, d.unit LIMIT 20
@@ -66,13 +78,18 @@ CYPHER_PROMPT = """<bos><start_of_turn>user
 ## 铁律
 1. 永远不要使用 :RelationshipType 语法！用 -[r]-> 替代
 2. 过滤关系用 WHERE type(r) CONTAINS '中文关键词'
-3. 只生成 MATCH ... RETURN
-4. LIMIT 20
-5. 输出 JSON
+3. 用户指定年份时，用 d.year = '2024' 过滤（而不是 type(r) CONTAINS '2024'）
+4. 查询所有年份数据时，加 d.year AS 年份 并 ORDER BY d.year DESC
+5. 只生成 MATCH ... RETURN
+6. LIMIT 20
+7. 输出 JSON
 
 ## 必看示例
 Q: 兰州水文站径流量
-A: {{"cypher":"MATCH (s)-[r]->(d) WHERE s.name CONTAINS '兰州' AND type(r) CONTAINS '径流' RETURN s.name AS 实体, type(r) AS 指标, d.value AS 数值 LIMIT 20","explanation":"查径流量"}}
+A: {{"cypher":"MATCH (s)-[r]->(d:AnnualHydrologyData) WHERE s.name CONTAINS '兰州' AND type(r) CONTAINS '径流' RETURN s.name AS 实体, type(r) AS 指标, d.value AS 数值, d.year AS 年份 ORDER BY d.year DESC LIMIT 20","explanation":"查兰州历年的径流量"}}
+
+Q: 兰州水文站2024年径流量
+A: {{"cypher":"MATCH (s)-[r]->(d:AnnualHydrologyData) WHERE s.name CONTAINS '兰州' AND type(r) CONTAINS '径流' AND d.year = '2024' RETURN s.name AS 实体, type(r) AS 指标, d.value AS 数值 LIMIT 20","explanation":"查兰州2024年径流量"}}
 
 Q: 黄河流域用水总量
 A: {{"cypher":"MATCH (s)-[r]->(d) WHERE s.name CONTAINS '黄河' AND type(r) CONTAINS '用水' AND type(r) CONTAINS '总量' RETURN s.name AS 实体, type(r) AS 指标, d.value AS 数值 LIMIT 20","explanation":"查用水总量"}}
@@ -222,10 +239,15 @@ def format_answer(results: list, question: str) -> str:
             or ""
         )
         unit = r.get("d.unit") or r.get("unit") or ""
+        year = r.get("年份") or r.get("d.year") or r.get("year") or ""
 
         parts = []
         if entity:
             parts.append(str(entity))
+        if year and str(year) != "constant":
+            # 在实体后显示年份
+            if parts:
+                parts[0] = f"{parts[0]}({year}年)"
         if indicator:
             parts.append(str(indicator))
         if value:
