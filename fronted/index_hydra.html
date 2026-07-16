@@ -52,7 +52,7 @@
         background: var(--oled-0);
     }
     body {
-        background: var(--oled-0);
+        background: transparent;
         color: var(--text-primary);
         overflow-x: hidden;
     }
@@ -98,15 +98,15 @@
         z-index: 150;
         width: auto;
         max-width: calc(100vw - 40px);
-        background: rgba(10,10,14,0.72) !important;
+        background: rgba(18,20,26,0.78) !important;
         backdrop-filter: blur(24px) saturate(140%);
         -webkit-backdrop-filter: blur(24px) saturate(140%);
-        border: 1px solid var(--hairline);
+        border: 1px solid var(--hairline-bright);
         border-radius: 100px;
         padding: 0 8px;
         box-shadow:
-            inset 0 1px 0 rgba(255,255,255,0.06),
-            0 8px 32px rgba(0,0,0,0.5);
+            inset 0 1px 0 rgba(255,255,255,0.10),
+            0 8px 32px rgba(0,0,0,0.45);
         transition: transform var(--duration-med) var(--ease-spring);
     }
     .s-header.sticky {
@@ -139,12 +139,12 @@
         height: 52px !important;
         line-height: 52px !important;
         padding: 0 14px !important;
-        color: rgba(255,255,255,0.55) !important;
+        color: rgba(255,255,255,0.68) !important;
         transition: color var(--duration-med) var(--ease-out-expo);
     }
     .s-header__nav a:hover { color: #fff !important; }
     .s-header__nav .current a {
-        background: rgba(255,255,255,0.08) !important;
+        background: rgba(255,255,255,0.10) !important;
         color: var(--accent) !important;
         border-radius: 100px;
     }
@@ -198,21 +198,21 @@
         max-width: 540px;
     }
     .s-home__line { display: none; }
-    /* dark overlay on hero bg — lighter so image is visible */
+    /* dark overlay on hero bg — matching index.html solid overlay */
     .s-home::before {
+        display: block;
         content: "";
         position: absolute;
-        inset: 0;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
         z-index: 1;
-        background: linear-gradient(
-            180deg,
-            rgba(3,3,3,0.30) 0%,
-            rgba(3,3,3,0.55) 60%,
-            rgba(3,3,3,0.72) 100%
-        );
+        opacity: .78;
+        background-color: black;
     }
     .s-home {
-        background-color: var(--oled-0);
+        /* background transparent — let parallax mirror show through */
     }
     .chat-section {
         background-color: var(--oled-0);
@@ -469,15 +469,38 @@
     }
 
     /* ───────────────────────────────────────────
-       5. ABOUT — Glass Cards + Number Anchors
+       5. ABOUT — Warm Slate + Editorial Cards
+          Differentiated from chat-section OLED black
+          via deep warm charcoal gradient + amber glow
        ─────────────────────────────────────────── */
     .s-about {
         position: relative;
         z-index: 1;
         padding: 120px 0 140px;
-        background-color: var(--oled-0);
+        background: linear-gradient(
+            180deg,
+            rgba(17,171,176,0.45) 0%,
+            rgba(18, 175, 181, 0.45) 8%,
+            rgba(18, 183, 188, 0.45) 30%,
+            rgba(20, 202, 208, 0.45) 65%,
+            hsl(182, 72%, 35%) 100%
+        );
+        border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    /* -- warm amber accent glow behind cards (vs teal elsewhere) -- */
+    .s-about::after {
+        content: "";
+        position: absolute;
+        top: 40%; left: 50%;
+        transform: translate(-50%, -50%);
+        width: 700px; height: 480px;
+        background: radial-gradient(ellipse, rgba(200,150,80,0.07) 0%, transparent 70%);
+        pointer-events: none;
+        z-index: 0;
     }
     .s-about .section-head {
+        position: relative;
+        z-index: 1;
         margin-bottom: 56px;
     }
     .s-about .section-head h2 {
@@ -488,18 +511,23 @@
     .s-about .section-head .desc { color: var(--accent); }
     .about-item {
         position: relative;
+        z-index: 1;
         padding: 40px 36px 36px;
-        background: var(--surface-1);
-        border: 1px solid var(--hairline);
+        background: rgba(255,255,255,0.035);
+        border: 1px solid rgba(255,255,255,0.09);
         border-radius: var(--radius-xl);
-        backdrop-filter: blur(8px);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
         transition: all var(--duration-slow) var(--ease-spring);
     }
     .about-item:hover {
-        background: var(--surface-2);
-        border-color: var(--hairline-bright);
+        background: rgba(255,255,255,0.06);
+        border-color: rgba(200,150,80,0.25);
         transform: translateY(-4px);
-        box-shadow: 0 20px 60px rgba(0,0,0,0.4), 0 0 0 1px var(--hairline-bright);
+        box-shadow:
+            0 20px 60px rgba(0,0,0,0.4),
+            0 0 0 1px rgba(200,150,80,0.12),
+            0 0 80px rgba(200,150,80,0.06);
     }
     .about-step-num {
         font-family: var(--font-2);
@@ -507,13 +535,13 @@
         font-weight: 800;
         line-height: 1;
         letter-spacing: -0.03em;
-        color: rgba(17,171,176,0.08);
+        color: rgba(200,150,80,0.07);
         margin-bottom: -18px;
         margin-left: -4px;
         transition: color var(--duration-slow) var(--ease-out-expo);
     }
     .about-item:hover .about-step-num {
-        color: rgba(17,171,176,0.18);
+        color: rgba(200,150,80,0.16);
     }
     .about-item h5 {
         font-size: var(--text-md);
@@ -530,22 +558,29 @@
     }
 
     /* ───────────────────────────────────────────
-       6. FOOTER — Minimal
+       6. FOOTER — Warm Slate Bookend
+          Harmonizes with about-section gradient,
+          warm amber accent replaces teal
        ─────────────────────────────────────────── */
     .s-footer {
         position: relative;
         z-index: 1;
-        padding: 40px 0;
-        border-top: 1px solid var(--hairline);
-        background: transparent;
-        color: var(--text-muted);
+        padding: 48px 0;
+        background: linear-gradient(
+            180deg,
+            #1e2332 0%,
+            #181d2a 40%,
+            #11161e 100%
+        );
+        border-top: 1px solid rgba(200,150,80,0.10);
+        color: var(--text-secondary);
     }
     .s-footer .ss-copyright span {
         font-size: var(--text-sm);
-        color: var(--text-muted);
+        color: var(--text-secondary);
     }
     .s-footer .ss-go-top a svg path { fill: var(--text-secondary); }
-    .s-footer .ss-go-top a:hover svg path { fill: var(--accent); }
+    .s-footer .ss-go-top a:hover svg path { fill: #c89650; }
 
     /* ───────────────────────────────────────────
        7. SCROLL REVEAL — Staggered Entry
@@ -635,7 +670,7 @@
     </header>
 
     <!-- home / hero -->
-    <section id="home" class="s-home target-section" data-parallax="scroll" data-image-src="images/hero-bg.jpg" data-natural-width="3000" data-natural-height="2000">
+    <section id="home" class="s-home target-section" data-parallax="scroll" data-image-src="images/yellowriver.png" data-natural-width="3000" data-natural-height="2000">
         <div class="s-home__content">
             <div class="s-home__slider">
                 <div class="s-home__slide s-home__slide--1">
@@ -724,24 +759,25 @@
                 <div class="about-step-num">01</div>
                 <h5>知识图谱</h5>
                 <p>
-                基于 Neo4j 图数据库，覆盖 6 类水利实体与 17 种关系类型。
-                支持实体别名识别与模糊匹配。
+                基于 Neo4j 图数据库，覆盖 11 类水利实体与 48 种标准关系类型，
+                共 993 个节点、1,034 条关系。支持实体别名识别（241 条别名库）与模糊匹配。
                 </p>
             </div>
             <div class="column about-item" data-aos="fade-up">
                 <div class="about-step-num">02</div>
                 <h5>双模型架构</h5>
                 <p>
-                DeepSeek API 负责知识三元组抽取，Gemma 3 4B Text2Cypher 负责自然语言查询生成。
-                动态中文关系类型语义匹配。
+                DeepSeek API (deepseek-v4-flash) 负责知识三元组抽取；
+                Gemma 3 4B Text2Cypher 负责自然语言查询生成。
+                规则驱动的关系标准化管道，匹配率 98.1%。
                 </p>
             </div>
             <div class="column about-item" data-aos="fade-up">
                 <div class="about-step-num">03</div>
-                <h5>快速响应</h5>
+                <h5>本地推理</h5>
                 <p>
-                Cypher 缓存机制 + 模板化答案生成，常规查询 1-2 秒返回结果。
-                复杂查询自动调用 LLM 整理答案。
+                Gemma 3 4B 模型本地 GPU 推理（llama-cpp-python），
+                简单单实体查询稳定响应。只读安全机制自动拦截写操作，支持年份过滤与跨年对比。
                 </p>
             </div>
         </div>
