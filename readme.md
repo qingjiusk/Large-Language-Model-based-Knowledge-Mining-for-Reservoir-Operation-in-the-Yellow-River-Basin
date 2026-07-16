@@ -109,6 +109,10 @@ HydroBrain/
 │   ├── define.txt                  # 关系语义定义
 │   └── canonicalize.txt            # 关系标准化
 │
+├── fronted/                         # 前端页面（纯静态）
+│   ├── index_hydra.html             # 问答系统首页
+│   └── optimization.html            # 优化调度数据页面
+│
 ├── scripts/
 │   ├── build_kg_from_dir.py        # 全链路构建脚本（PDF + 图片）
 │   ├── normalize_triplets.py       # 三元组规范化（实体对齐+关系映射+年份+清洗）
@@ -325,12 +329,15 @@ python scripts/rebuild_kg.py --dry-run       # 仅验证，不写库
 - 自动拦截 CREATE / DELETE / DROP / SET / REMOVE / MERGE
 - 关系语法自动修复：`:中文` → `type(r) CONTAINS '中文'`
 
+### 年份过滤
+
+图谱中 `AnnualHydrologyData` 节点和关系都存储了 `year` 属性。查询年份时，模型会生成 `d.year = '2024'` 过滤条件，可实现精确跨年对比查询（如"兰州水文站2024年和2023年径流量"）。
+
 ### 后续优化方向
 
 - 补充更多 few-shot 示例覆盖失败查询模式
 - 换用 Gemma 3 12B 或 Qwen2.5-7B 提升指令遵循
 - DeepSeek API 兜底复杂查询（混合模式）
-- 论文中可评估 P/R/F1 指标
 
 ---
 
@@ -359,13 +366,16 @@ python scripts/rebuild_kg.py --dry-run       # 仅验证，不写库
 | GET | `/api/optimization/hydrology?reservoir_id=xxx` | 水文时间序列 |
 | GET | `/api/optimization/reservoirs` | 可优化水库列表 |
 
-### 查询 API (:8001) — 自然语言查询
+### 查询 API (:8001) — 自然语言查询 + 前端
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/` | 健康检查 |
-| POST | `/query` | JSON 格式自然语言查询 |
-| GET | `/query?q=xxx` | URL 参数自然语言查询 |
+| GET | `/` | 问答系统前端页面 |
+| GET | `/api/health` | 健康检查（前端格式） |
+| POST | `/api/chat` | 自然语言问答（返回 answer + cypher + timing） |
+| GET | `/optimization.html` | 优化调度数据页面 |
+| POST | `/query` | (兼容旧版) JSON 格式查询 |
+| GET | `/query?q=xxx` | (兼容旧版) URL 参数查询 |
 
 查询请求示例：
 ```json
