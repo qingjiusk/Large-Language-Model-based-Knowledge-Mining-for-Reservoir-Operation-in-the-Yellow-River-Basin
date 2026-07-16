@@ -309,16 +309,19 @@
    /* smooth scrolling
     * ------------------------------------------------------ */
     const ssSmoothScroll = function() {
-        
+
         $('.smoothscroll').on('click', function (e) {
             const target = this.hash;
             const $target = $(target);
-            
+
             e.preventDefault();
             e.stopPropagation();
 
+            // Compensate for floating nav height + breathing room
+            const navOffset = 100;
+
             $('html, body').stop().animate({
-                'scrollTop': $target.offset().top
+                'scrollTop': $target.offset().top - navOffset
             }, cfg.scrollDuration, 'swing').promise().done(function () {
                 window.location.hash = target;
             });

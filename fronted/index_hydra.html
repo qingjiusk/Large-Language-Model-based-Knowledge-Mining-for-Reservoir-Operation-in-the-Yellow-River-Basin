@@ -48,6 +48,7 @@
        ─────────────────────────────────────────── */
     html {
         scroll-behavior: smooth;
+        scroll-padding-top: 100px;
         background: var(--oled-0);
     }
     body {
@@ -108,12 +109,15 @@
             0 8px 32px rgba(0,0,0,0.5);
         transition: transform var(--duration-med) var(--ease-spring);
     }
+    .s-header.sticky {
+        left: 50% !important;
+    }
     .s-header.offset {
-        transform: translate(-50%, -140%);
+        transform: translateX(-50%) translateY(-140%);
     }
     .s-header.scrolling,
     .s-header.sticky.scrolling {
-        transform: translate(-50%, 0);
+        transform: translateX(-50%) translateY(0);
         opacity: 1;
         visibility: visible;
     }
@@ -194,15 +198,24 @@
         max-width: 540px;
     }
     .s-home__line { display: none; }
-    /* hero background — dark overlay on image */
+    /* dark overlay on hero bg — lighter so image is visible */
     .s-home::before {
         content: "";
         position: absolute;
         inset: 0;
         z-index: 1;
-        background:
-            radial-gradient(ellipse at 70% 30%, rgba(17,171,176,0.08) 0%, transparent 60%),
-            linear-gradient(180deg, rgba(3,3,3,0.55) 0%, rgba(3,3,3,0.85) 100%);
+        background: linear-gradient(
+            180deg,
+            rgba(3,3,3,0.30) 0%,
+            rgba(3,3,3,0.55) 60%,
+            rgba(3,3,3,0.72) 100%
+        );
+    }
+    .s-home {
+        background-color: var(--oled-0);
+    }
+    .chat-section {
+        background-color: var(--oled-0);
     }
     @media screen and (max-width: 768px) {
         .s-home { min-height: 90dvh; padding: 100px 0 60px; }
@@ -462,6 +475,7 @@
         position: relative;
         z-index: 1;
         padding: 120px 0 140px;
+        background-color: var(--oled-0);
     }
     .s-about .section-head {
         margin-bottom: 56px;
