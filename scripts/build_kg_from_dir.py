@@ -21,16 +21,13 @@ from src.common.config_loader import ConfigLoader
 from src.common.logger import get_logger, setup_logging
 from src.document_processing.pdf_parser import PDFParser
 from src.document_processing.text_splitter import TextSplitter
-from src.llm_pipeline.llm_client import DeepSeekClient
+from src.llm_pipeline.uie_client import UIEClient
 from src.llm_pipeline.extractor import TripletExtractor
-from src.llm_pipeline.definer import SemanticDefiner
-from src.llm_pipeline.canonicalizer import RelationCanonicalizer
 from src.knowledge_fusion.entity_linking import EntityLinker
-from src.knowledge_fusion.conflict_resolver import ConflictResolver
+from src.knowledge_fusion.triplet_normalizer import TripletNormalizer
 from src.knowledge_graph.neo4j_client import Neo4jClient
-from src.knowledge_graph.graph_builder import GraphBuilder
-from src.document_processing.schema_mapper import SchemaMapper
 from src.document_processing.image_parser import ImageParser, SUPPORTED_FORMATS
+from scripts.rebuild_kg import rebuild_graph
 
 logger = get_logger(__name__)
 
@@ -46,9 +43,7 @@ class KGPipeline:
             "tables_extracted": 0,
             "chunks_created": 0,
             "triplets_extracted": 0,
-            "relations_defined": 0,
-            "relations_canonicalized": 0,
-            "conflicts_resolved": 0,
+            "triplets_normalized": 0,
             "nodes_written": 0,
             "relationships_written": 0,
         }
@@ -74,14 +69,14 @@ class KGPipeline:
 
         # ---- 初始化组件 ----
 
-        # DeepSeek
-        ds_config = self.config.get_deepseek_config()
-        ds_client = DeepSeekClient(
-            api_key=ds_config.get("api_key", ""),
-            base_url=ds_config.get("base_url", "https://api.deepseek.com"),
-            model=ds_config.get("model", "deepseek-chat"),
-            max_tokens=ds_config.get("max_tokens", 4096),
-            temperature=ds_config.get("temperature", 0.0),
+        # PP-UIE 本地模型（替代 DeepSeek API，零 API 调用）
+        uie_config = self.config.get("uie", {})
+        uie_client = UIEClient(
+            model_path=uie_config.get("model_path", "models/PP-UIE-1.5B"),
+            device=uie_config.get("device", "gpu"),
+            precision=uie_config.get("precision", "float16"),
+            max_length=uie_config.get("max_length", 4096),
+            temperature=uie_config.get("temperature", 0.0),
         )
 
         # 文档处理（PaddleOCR 自动检测表格，无需 pdfplumber）
@@ -92,29 +87,21 @@ class KGPipeline:
         )
 
         # LLM 管线
-        extractor = TripletExtractor(ds_client, prompts_dir="prompts")
+        extractor = TripletExtractor(uie_client, prompts_dir="prompts")
         embed_device = self.config.get("embedding.device", "cpu")
 
-        definer = SemanticDefiner(ds_client, prompts_dir="prompts", device=embed_device)
-        canonicalizer = RelationCanonicalizer(
-            ds_client,
-            standard_relations=self._load_standard_relations(),
-            prompts_dir="prompts",
-            device=embed_device,
-            top_k=self.config.get("canonicalization.top_k_candidates", 3),
-            mode=self.config.get("canonicalization.mode", "strict"),
-            min_similarity=self.config.get("canonicalization.min_similarity_threshold", 0.7),
-        )
-
-        # 知识融合
+        # 知识融合 — 实体链接器
         entity_linker = EntityLinker(
             device=embed_device,
             alias_dict_path=self.config.get("ontology.alias_dict", "data/ontology/alias_dict.json"),
             entity_types_path=self.config.get("ontology.entity_types", "data/ontology/entity_types.json"),
         )
 
-        # Neo4j
-        graph_builder = None
+        # 三元组规范化器（纯规则，零 API 调用）
+        normalizer = TripletNormalizer(entity_linker=entity_linker)
+
+        # Neo4j（直接连接，供 rebuild_graph 使用）
+        neo4j_client = None
         if not self.skip_neo4j:
             neo4j_config = self.config.get_neo4j_config()
             try:
@@ -123,11 +110,6 @@ class KGPipeline:
                     user=neo4j_config.get("user", "neo4j"),
                     password=neo4j_config.get("password", "password"),
                 )
-                conflict_resolver = ConflictResolver(
-                    table_priority=self.config.get("fusion.table_priority_over_text", True),
-                    enable_year_distinction=self.config.get("fusion.enable_year_based_distinction", True),
-                )
-                graph_builder = GraphBuilder(neo4j_client, entity_linker, conflict_resolver)
                 logger.info("Neo4j 连接就绪")
             except Exception as e:
                 logger.error(f"Neo4j 连接失败: {e}")
@@ -155,7 +137,7 @@ class KGPipeline:
         # 图片解析器（延迟初始化）
         image_parser = None
 
-        all_resolved = []
+        all_normalized = []
 
         # ---- 统一处理循环 ----
         for input_file in all_input_files:
@@ -166,7 +148,7 @@ class KGPipeline:
 
             try:
                 # Step 1: 解析 → 文本 + 表格
-                logger.info("[Step 1/6] 解析...")
+                logger.info("[Step 1/5] 解析...")
                 if suffix == ".pdf":
                     doc_result = pdf_parser.extract_text_with_meta(str(input_file))
                 else:
@@ -184,15 +166,15 @@ class KGPipeline:
                 )
 
                 # Step 2: 文本切片
-                logger.info("[Step 2/6] 文本切片...")
+                logger.info("[Step 2/5] 文本切片...")
                 chunks = text_splitter.split_document(doc_result)
                 self.stats["chunks_created"] += len(chunks)
                 logger.info(f"  -> {len(chunks)} 个 chunks")
 
                 # Step 3: LLM 抽取（文本批量 + 表格）
-                logger.info("[Step 3/6] LLM 三元组抽取...")
+                logger.info("[Step 3/5] LLM 三元组抽取...")
                 all_triplets = []
-                batch_size = self.config.get("deepseek.batch_size", 6)
+                batch_size = self.config.get("uie.batch_size", 2)
 
                 # 文本抽取 — 过滤噪声后批量处理
                 clean_chunks = []
@@ -248,50 +230,41 @@ class KGPipeline:
                     logger.warning(f"  -> 未抽取到任何三元组，跳过后续步骤")
                     continue
 
-                # Step 4: 语义定义
-                logger.info("[Step 4/6] 关系语义定义...")
-                relations = list(set(t.get("relation", "") for t in all_triplets if t.get("relation")))
-                definitions = definer.define_relations(relations, doc_result.get("full_text", "")[:5000])
-                self.stats["relations_defined"] += len(definitions)
-                logger.info(f"  -> {len(definitions)} 个关系定义")
+                # Step 4: 三元组规范化（纯规则，零 API 调用）
+                logger.info("[Step 4/5] 三元组规范化...")
+                normalized = normalizer.normalize(all_triplets)
+                self.stats["triplets_normalized"] += len(normalized)
+                logger.info(
+                    f"  -> {len(normalized)} 条 "
+                    f"(拆分+{normalizer.stats['triplets_split']}, "
+                    f"无效-{normalizer.stats['triplets_invalid']}, "
+                    f"去重-{normalizer.stats.get('triplets_deduped', 0)}, "
+                    f"匹配: 精确{normalizer.stats['relations_matched_exact']}/"
+                    f"关键词{normalizer.stats['relations_matched_keyword']}/"
+                    f"未匹配{normalizer.stats['relations_unmatched']})"
+                )
 
-                # Step 5: 关系标准化
-                logger.info("[Step 5/6] 关系标准化...")
-                canonicalized = canonicalizer.batch_canonicalize(all_triplets, definitions)
-                self.stats["relations_canonicalized"] += len(canonicalized)
-                logger.info(f"  -> {len(canonicalized)} 条标准化三元组")
-
-                all_resolved.extend(canonicalized)
+                all_normalized.extend(normalized)
 
                 # 保存中间结果
                 result_path = output_dir / f"{input_file.stem}_triplets.json"
                 with open(result_path, "w", encoding="utf-8") as f:
-                    json.dump(canonicalized, f, ensure_ascii=False, indent=2)
+                    json.dump(normalized, f, ensure_ascii=False, indent=2)
                 logger.info(f"  -> 中间结果已保存: {result_path}")
 
             except Exception as e:
                 logger.error(f"处理失败: {input_file.name}, 错误: {e}", exc_info=True)
                 continue
 
-        # Step 6: Neo4j 图谱写入
-        if not self.skip_neo4j and graph_builder and all_resolved:
-            logger.info(f"\n[Step 6/6] Neo4j 图谱写入 ({len(all_resolved)} 条三元组)...")
+        # Step 5: Neo4j 图谱写入
+        if not self.skip_neo4j and neo4j_client and all_normalized:
+            logger.info(f"\n[Step 5/5] Neo4j 图谱写入 ({len(all_normalized)} 条规范化三元组, mode={mode})...")
 
-            source_doc = {
-                "name": pdf_dir.name or "bulk_import",
-                "type": "PDF批量导入",
-            }
-
-            build_stats = graph_builder.build_from_triplets(
-                all_resolved,
-                source_doc=source_doc,
-                mode=mode,
-            )
+            build_stats, db_stats = rebuild_graph(neo4j_client, all_normalized, mode=mode)
             self.stats["nodes_written"] = build_stats.get("nodes_created", 0)
             self.stats["relationships_written"] = build_stats.get("relationships_created", 0)
-            self.stats["conflicts_resolved"] = build_stats.get("conflicts_resolved", 0)
         elif self.skip_neo4j:
-            logger.info("\n[Step 6/6] 跳过 Neo4j 写入")
+            logger.info("\n[Step 5/5] 跳过 Neo4j 写入")
 
         # 最终统计
         elapsed = time.time() - start_time
@@ -302,31 +275,16 @@ class KGPipeline:
         logger.info(f"提取表格: {self.stats['tables_extracted']} 个")
         logger.info(f"文本切片: {self.stats['chunks_created']} 个")
         logger.info(f"抽取三元组: {self.stats['triplets_extracted']} 条")
-        logger.info(f"关系定义: {self.stats['relations_defined']} 个")
-        logger.info(f"标准化三元组: {self.stats['relations_canonicalized']} 条")
-        logger.info(f"冲突解决: {self.stats['conflicts_resolved']} 个")
+        logger.info(f"规范化三元组: {self.stats['triplets_normalized']} 条")
         logger.info(f"图谱节点: {self.stats['nodes_written']} 个")
         logger.info(f"图谱关系: {self.stats['relationships_written']} 条")
         logger.info("=" * 70)
 
+        if neo4j_client:
+            neo4j_client.close()
+
         return self.stats
 
-    def _load_standard_relations(self) -> dict:
-        """加载标准关系定义"""
-        import json
-        rel_path = Path(self.config.get("ontology.relation_types", "data/ontology/relation_types.json"))
-        if not rel_path.exists():
-            logger.warning(f"标准关系文件不存在: {rel_path}")
-            return {}
-
-        with open(rel_path, "r", encoding="utf-8") as f:
-            rel_data = json.load(f)
-
-        # 转换为 {id: description} 格式
-        return {
-            rel_id: info.get("description", "")
-            for rel_id, info in rel_data.items()
-        }
 
 
 def main():

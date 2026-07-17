@@ -111,16 +111,19 @@ class DeepSeekClient:
         """
         messages = [{"role": "user", "content": prompt}]
 
+        # DeepSeek 要求 prompt 中包含 "json" 字样才能启用 json_object 模式
+        # 没有 system_prompt 时自动注入一个
+        effective_system = system_prompt or "You must respond with valid JSON."
+
         # 尝试使用 JSON mode
         for attempt in range(self.max_retries):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
-                    messages=(
-                        [{"role": "system", "content": system_prompt}] + messages
-                        if system_prompt
-                        else messages
-                    ),
+                    messages=[
+                        {"role": "system", "content": effective_system},
+                        *messages,
+                    ],
                     temperature=0,
                     max_tokens=self.max_tokens,
                     response_format={"type": "json_object"},

@@ -275,7 +275,7 @@ def rebuild_graph(
 def main():
     parser = argparse.ArgumentParser(description="HydroBrain 从规范化三元组重建 Neo4j")
     parser.add_argument(
-        "--input", default="data/processed/黄河水资源2024_triplets_normalized.json",
+        "--input", default="data/processed/黄河基础知识_triplets_normalized.json",
         help="规范化三元组 JSON"
     )
     parser.add_argument(

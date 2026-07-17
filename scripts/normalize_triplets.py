@@ -79,7 +79,7 @@ def print_stats(normalized: list, stats: dict):
 def main():
     parser = argparse.ArgumentParser(description="HydroBrain 三元组规范化")
     parser.add_argument(
-        "--input", default="data/processed/黄河水资源2024_triplets.json",
+        "--input", default="data/processed/黄河基础知识_triplets.json",
         help="原始三元组 JSON 路径"
     )
     parser.add_argument(
