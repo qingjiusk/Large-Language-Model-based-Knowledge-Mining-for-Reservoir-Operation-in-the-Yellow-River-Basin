@@ -74,7 +74,7 @@ class OCRPipeline:
             logger.warning(f"目录中无文件: {pdf_dir}")
             return {}
 
-        output_dir = Path(self.config.get("data.processed_dir", "data/processed"))
+        output_dir = Path("data/processed/text_extracted")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 图片解析器（延迟初始化）

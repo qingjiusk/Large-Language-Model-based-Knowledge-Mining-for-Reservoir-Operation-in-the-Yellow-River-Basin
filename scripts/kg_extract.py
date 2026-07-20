@@ -51,7 +51,7 @@ class KGExtractor:
     def __init__(
         self,
         model_path: str,
-        n_ctx: int = 4096,
+        n_ctx: int = 8192,
         n_batch: int = 256,
         f16_kv: bool = True,
     ):
@@ -105,7 +105,7 @@ class KGExtractor:
 
         output = self._model(
             prompt,
-            max_tokens=2048,
+            max_tokens=8192,
             temperature=0,
             stop=["<end_of_turn>", "<start_of_turn>"],
         )
@@ -192,9 +192,73 @@ class KGExtractor:
             valid.append(t)
         return valid
 
+    # ================================================================
+    # 表格预处理
+    # ================================================================
+
+    @staticmethod
+    def _embed_units_in_table(md: str) -> str:
+        """将 Markdown 表头括号中的单位内嵌到每行数值中。
+
+        | 水库 | 总库容(亿m³) | 死水位(m) |
+        |------|-------------|-----------|
+        | 龙羊峡 | 247 | 2530 |
+        →
+        | 水库 | 总库容 | 死水位 |
+        |------|--------|--------|
+        | 龙羊峡 | 247亿m³ | 2530m |
+        """
+        import re
+        lines = md.strip().split("\n")
+        if len(lines) < 2:
+            return md
+
+        # 解析表头行，提取单位
+        header_line = lines[0]
+        cells = [c.strip() for c in header_line.strip("|").split("|")]
+        units = []
+        for cell in cells:
+            m = re.search(r'\((.+?)\)$', cell)
+            units.append(m.group(1) if m else None)
+
+        if not any(units):
+            return md  # 无单位直接返回
+
+        # 清理表头（去掉括号部分）
+        clean_header = "| " + " | ".join(
+            re.sub(r'\s*\(.+?\)$', '', c).strip() for c in cells
+        ) + " |"
+
+        # 逐行处理数据行，拼上单位
+        new_lines = [clean_header, lines[1]]  # 表头 + 分隔符
+        for line in lines[2:]:
+            row_cells = [c.strip() for c in line.strip("|").split("|")]
+            new_cells = []
+            for i, cell in enumerate(row_cells):
+                unit = units[i] if i < len(units) else None
+                if unit and cell and re.search(r'\d', cell):
+                    cell += unit
+                new_cells.append(cell)
+            new_lines.append("| " + " | ".join(new_cells) + " |")
+
+        return "\n".join(new_lines)
+
+    @staticmethod
+    def _split_large_table(md: str, max_rows: int = 8) -> list:
+        """将大表格按行拆分为多个小表格（每组保留表头+分隔符）"""
+        lines = md.strip().split("\n")
+        if len(lines) <= max_rows + 2:
+            return [md]
+        header = lines[:2]
+        data_rows = lines[2:]
+        chunks = []
+        for i in range(0, len(data_rows), max_rows):
+            chunks.append("\n".join(header + data_rows[i:i + max_rows]))
+        return chunks
+
     def run(
         self,
-        input_dir: str = "data/processed",
+        input_dir: str = "data/processed/text_extracted",
         mode: str = "append",
         dry_run: bool = False,
         limit: int = 0,
@@ -276,31 +340,40 @@ class KGExtractor:
                 logger.info(f"  文本完成: {len(all_triplets)} 条")
 
             # ---- 表格抽取 ----
+            table_count = 0
             if tables:
                 logger.info(f"表格抽取: {len(tables)} 个表格")
-                for tbl in tables:
+                for tbl_idx, tbl in enumerate(tables):
                     md = tbl.get("markdown", "")
                     ctx = tbl.get("context", "")
                     if not md.strip():
                         continue
-                    # 用表格专用 prompt（含 context）
-                    user_prompt = TABLE_PROMPT_TEMPLATE.format(
-                        table_markdown=md, context=ctx or ""
-                    )
-                    prompt = build_gemma_prompt(user_prompt)
-                    output = self._model(
-                        prompt, max_tokens=2048, temperature=0,
-                        stop=["<end_of_turn>", "<start_of_turn>"],
-                    )
-                    content = output["choices"][0]["text"].strip()
-                    triplets = self._parse_response(content)
-                    for t in triplets:
-                        t["source_file"] = source_file
-                        t["page_num"] = tbl.get("page_num", 1)
-                        t["table_id"] = tbl.get("table_id", "")
-                        t["data_type"] = "tabular"
-                    all_triplets.extend(triplets)
-                logger.info(f"  表格完成: {len(all_triplets) - self.stats['triplets_raw']} 条")
+                    # 预处理: 内嵌单位 + 拆分大表格
+                    md = self._embed_units_in_table(md)
+                    table_chunks = self._split_large_table(md, max_rows=3)
+                    logger.info(f"  表格 {tbl_idx+1}/{len(tables)}: {len(table_chunks)} 段")
+
+                    for seg_idx, tmd in enumerate(table_chunks):
+                        if len(table_chunks) > 1:
+                            logger.info(f"    段 {seg_idx+1}/{len(table_chunks)}...")
+                        user_prompt = TABLE_PROMPT_TEMPLATE.format(
+                            table_markdown=tmd, context=ctx or ""
+                        )
+                        prompt = build_gemma_prompt(user_prompt)
+                        output = self._model(
+                            prompt, max_tokens=4096, temperature=0,
+                            stop=["<end_of_turn>", "<start_of_turn>"],
+                        )
+                        content = output["choices"][0]["text"].strip()
+                        triplets = self._parse_response(content)
+                        for t in triplets:
+                            t["source_file"] = source_file
+                            t["page_num"] = tbl.get("page_num", 1)
+                            t["table_id"] = tbl.get("table_id", "")
+                            t["data_type"] = "tabular"
+                        table_count += len(triplets)
+                        all_triplets.extend(triplets)
+                logger.info(f"  表格完成: {table_count} 条")
 
             self.stats["triplets_raw"] += len(all_triplets)
             logger.info(f"  总原始三元组: {len(all_triplets)}")
@@ -324,7 +397,9 @@ class KGExtractor:
             )
 
             # 保存规范化结果
-            result_path = int_file.parent / f"{int_file.stem.replace('_intermediate', '')}_triplets.json"
+            norm_dir = Path("data/processed/normalize")
+            norm_dir.mkdir(parents=True, exist_ok=True)
+            result_path = norm_dir / f"{int_file.stem.replace('_intermediate', '')}_triplets.json"
             with open(result_path, "w", encoding="utf-8") as f:
                 json.dump(normalized, f, ensure_ascii=False, indent=2)
             logger.info(f"  规范化结果已保存: {result_path}")
@@ -344,7 +419,9 @@ class KGExtractor:
             )
 
             # 保存汇总规范化结果
-            summary_path = input_dir / "_all_triplets_normalized.json"
+            summary_dir = Path("data/processed/all_normalized_triplets")
+            summary_dir.mkdir(parents=True, exist_ok=True)
+            summary_path = summary_dir / "all_triplets_normalized.json"
             with open(summary_path, "w", encoding="utf-8") as f:
                 json.dump(all_normalized, f, ensure_ascii=False, indent=2)
             logger.info(f"  汇总结果已保存: {summary_path}")
@@ -379,7 +456,7 @@ def main():
         help="Neo4j 模式: full=清空重建, append=增量追加"
     )
     parser.add_argument(
-        "--input-dir", default="data/processed",
+        "--input-dir", default="data/processed/text_extracted",
         help="中间文件目录 (默认: data/processed)"
     )
     parser.add_argument(
@@ -388,7 +465,7 @@ def main():
     )
     parser.add_argument("--dry-run", action="store_true", help="仅抽取，不写 Neo4j")
     parser.add_argument("--limit", type=int, default=0, help="限制处理 chunk 数（调试用）")
-    parser.add_argument("--n-ctx", type=int, default=4096, help="上下文窗口大小")
+    parser.add_argument("--n-ctx", type=int, default=8192, help="上下文窗口大小")
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
