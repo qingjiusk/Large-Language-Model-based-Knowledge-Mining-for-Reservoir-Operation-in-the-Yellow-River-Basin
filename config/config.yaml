@@ -14,15 +14,6 @@ deepseek:
   retry_delay: 5
   batch_size: 4            # 降为 4，表格批量 JSON 约 30K chars 不截断
 
-# ---------- PP-UIE 本地抽取 ----------
-uie:
-  model_path: "models/PP-UIE-1.5B"
-  device: "gpu"
-  precision: "float16"
-  max_length: 4096
-  temperature: 0.0          # 0=确定性输出，适合结构化 JSON 抽取
-  batch_size: 2             # PP-UIE seq_length=8192，batch 不宜过大避免截断
-
 # ---------- 数据路径 ----------
 data:
   raw_dir: "data/raw"
