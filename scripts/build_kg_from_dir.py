@@ -59,12 +59,12 @@ class OCRPipeline:
             chunk_overlap=self.config.get("text_splitter.chunk_overlap", 200),
         )
 
-        # ---- 收集文件 (PDF + 图片) ----
-        pdf_files = list(set(pdf_dir.glob("*.pdf")))
+        # ---- 收集文件 (PDF + 图片，递归子目录) ----
+        pdf_files = list(set(pdf_dir.rglob("*.pdf")))
         image_files = []
         for fmt in SUPPORTED_FORMATS:
-            image_files.extend(pdf_dir.glob(f"*{fmt}"))
-            image_files.extend(pdf_dir.glob(f"*{fmt.upper()}"))
+            image_files.extend(pdf_dir.rglob(f"*{fmt}"))
+            image_files.extend(pdf_dir.rglob(f"*{fmt.upper()}"))
         image_files = list(set(image_files))
 
         all_input_files = pdf_files + image_files
