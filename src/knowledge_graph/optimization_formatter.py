@@ -181,6 +181,161 @@ class OptimizationFormatter:
             "dispatch_rules": rules,
         }
 
+    def build_formulation_batch(
+        self,
+        batch_data: Dict,
+        include_hydrology: bool = True,
+        include_rules: bool = True,
+    ) -> Dict:
+        """
+        批量构建多个水库的优化问题结构
+
+        Args:
+            batch_data: get_formulation_batch() 的返回值
+                {"reservoirs": {id: {reservoir, constraints, parameters, ...}}, "relations": [...]}
+
+        Returns:
+            {"reservoirs": {id: formulation, ...}, "relations": [...]}
+        """
+        formulations = {}
+        for rid, raw in batch_data.get("reservoirs", {}).items():
+            reservoir = raw.get("reservoir", {})
+            if not reservoir:
+                reservoir = {"id": rid, "name": rid}
+
+            formulations[rid] = self.build_formulation(
+                reservoir=reservoir,
+                constraints_raw=raw.get("constraints", []),
+                parameters=raw.get("parameters", {}),
+                hydrology_series=raw.get("hydrology_series", []) if include_hydrology else None,
+                dispatch_rules=raw.get("dispatch_rules", []) if include_rules else None,
+            )
+
+        return {
+            "reservoirs": formulations,
+            "relations": batch_data.get("relations", []),
+        }
+
+    def build_solver_ready(
+        self,
+        batch_data: Dict,
+        year: Optional[int] = None,
+    ) -> Dict:
+        """
+        构建求解器就绪格式 — 紧凑、可直接喂给优化算法
+
+        Args:
+            batch_data: get_formulation_batch() 的返回值
+            year: 可选，过滤时间序列
+
+        Returns:
+            {"variables": [...], "constraints": [...], "time_series": {...}, "objective_hints": [...]}
+        """
+        reservoir_ids = list(batch_data.get("reservoirs", {}).keys())
+        all_variables = []
+        all_constraints = []
+        all_time_series = {}
+        all_objective_hints = set()
+        reservoir_map = {}  # index -> reservoir_id
+
+        for idx, rid in enumerate(reservoir_ids):
+            reservoir_map[idx] = rid
+            raw = batch_data["reservoirs"][rid]
+            reservoir = raw.get("reservoir", {}) or {"id": rid, "name": rid}
+
+            fmt = self.build_formulation(
+                reservoir=reservoir,
+                constraints_raw=raw.get("constraints", []),
+                parameters=raw.get("parameters", {}),
+                hydrology_series=raw.get("hydrology_series", []) if year else None,
+                dispatch_rules=None,  # solver format doesn't include rules
+            )
+
+            # 决策变量 → 加 index 后缀
+            for var in fmt.get("decision_variables", []):
+                all_variables.append({
+                    "symbol": f"{var['symbol']}_{idx + 1}",
+                    "name": f"{reservoir.get('name', rid)}_{var['name']}",
+                    "lower": var.get("bounds", {}).get("lower"),
+                    "upper": var.get("bounds", {}).get("upper"),
+                    "unit": var.get("unit", ""),
+                })
+
+            # 约束 → 替换变量名为带 index 的符号
+            for cons in fmt.get("constraints", []):
+                if cons.get("expression"):
+                    expr = cons["expression"]
+                    # 替换变量符号: Z -> Z_1, Q_out -> Q_out_2 等
+                    for var in fmt.get("decision_variables", []):
+                        bare_symbol = var["symbol"]
+                        indexed_symbol = f"{bare_symbol}_{idx + 1}"
+                        expr = expr.replace(bare_symbol, indexed_symbol)
+                    all_constraints.append({
+                        "expression": expr,
+                        "type": cons.get("category", "unknown"),
+                        "description": cons.get("name", ""),
+                    })
+
+            # 目标函数提示
+            for obj in fmt.get("objective_candidates", []):
+                all_objective_hints.add(
+                    f"{obj['type']}_{obj['description']}"
+                )
+
+            # 时间序列
+            ts_entries = fmt.get("time_series", {}).get("entries", [])
+            if ts_entries:
+                series_by_indicator = {}
+                for entry in ts_entries:
+                    indicator = entry.get("indicator", "unknown")
+                    if indicator not in series_by_indicator:
+                        series_by_indicator[indicator] = []
+                    series_by_indicator[indicator].append({
+                        "year": entry.get("year"),
+                        "value": entry.get("value"),
+                        "unit": entry.get("unit"),
+                    })
+                all_time_series[reservoir.get("name", rid)] = series_by_indicator
+
+            # 参数中的水位约束也作为 constraint 加入
+            params = fmt.get("parameters", {})
+            for param_key, param_val in params.items():
+                if not isinstance(param_val, dict):
+                    continue
+                val = param_val.get("value")
+                unit = param_val.get("unit", "")
+                if val is None:
+                    continue
+
+                # 死水位 → >=约束
+                if param_key == "dead_storage_level":
+                    sym = f"Z_{idx + 1}"
+                    all_constraints.append({
+                        "expression": f"{sym} >= {val}",
+                        "type": "water_level",
+                        "description": f"{reservoir.get('name', rid)} 死水位约束",
+                    })
+                # 防洪限制水位 → <=约束
+                elif param_key == "flood_control_level":
+                    sym = f"Z_{idx + 1}"
+                    all_constraints.append({
+                        "expression": f"{sym} <= {val}",
+                        "type": "water_level",
+                        "description": f"{reservoir.get('name', rid)} 防洪限制水位约束",
+                    })
+
+        return {
+            "variables": all_variables,
+            "constraints": all_constraints,
+            "time_series": all_time_series,
+            "objective_hints": sorted(all_objective_hints),
+            "meta": {
+                "reservoir_count": len(reservoir_ids),
+                "constraint_count": len(all_constraints),
+                "time_series_years": [year] if year else [],
+            },
+        }
+
     def categorize_constraint(self, text: str) -> Optional[str]:
         """给定一段中文文本，返回约束类别 (英文 key)"""
         if not text:
