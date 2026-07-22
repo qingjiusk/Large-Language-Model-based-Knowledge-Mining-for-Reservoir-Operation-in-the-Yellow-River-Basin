@@ -126,6 +126,19 @@ RELATION_RULES: Dict[str, Tuple[str, bool]] = {
     "平原区浅层地下水水位上升面积为": ("GW_LEVEL_RISE_AREA", True),
     "浅层地下水水位下降面积为": ("GW_LEVEL_DECLINE_AREA", True),
     "深层承压水水位上升面积为": ("GW_LEVEL_RISE_AREA", True),
+    # ---- 水位参数 ----
+    "死水位为": ("DEAD_STORAGE_LEVEL", False),
+    "防洪限制水位为": ("FLOOD_CONTROL_LEVEL", False),
+    "正常蓄水位为": ("NORMAL_STORAGE_LEVEL", False),
+    # ---- 水库基本属性 ----
+    "总库容为": ("TOTAL_CAPACITY", False),
+    "装机容量为": ("POWER_GENERATION", False),
+    "控制流域面积为": ("BASIN_AREA", False),
+    "坝址以上流域面积为": ("BASIN_AREA", False),
+    "所在河流为": ("LOCATED_ON", False),
+    "所在河段为": ("LOCATED_ON", False),
+    "坝址位于": ("LOCATED_ON", False),
+    "所在地区为": ("BELONGS_TO", False),
     # ---- 变更关系 ----
     "自2023年起更名为": ("STATION_RENAMED_TO", False),
 }
@@ -139,17 +152,25 @@ KEYWORD_RULES: List[Tuple[List[str], Optional[str], bool]] = [
     (["供水量", "供水"], "WATER_SUPPLY", True),
     (["用水量", "用水"], "WATER_USE", True),
     (["耗水量", "耗水"], "WATER_CONSUMPTION", True),
-    (["蓄水量", "蓄水变量", "蓄水"], "RESERVOIR_STORAGE", True),
-    (["地下水埋深", "埋深"], "GROUNDWATER_DEPTH", True),
+    # ---- 水位/库容规则（必须在通用"蓄水"前，避免"正常蓄水"被"蓄水"吃掉） ----
+    (["死水位", "死库容"], "DEAD_STORAGE_LEVEL", False),
+    (["防洪限制", "汛限", "防洪限制水位"], "FLOOD_CONTROL_LEVEL", False),
+    (["正常蓄水", "正常蓄水位"], "NORMAL_STORAGE_LEVEL", False),
+    (["蓄水位", "水位"], None, False),  # 水位兜底（蓄水位必须在"水位"前）
+    (["防洪库容"], "FLOOD_CONTROL_CAPACITY", False),
     (["库容", "总库容"], "TOTAL_CAPACITY", False),
-    (["水位", "蓄水位", "汛限", "正常蓄水", "死水位", "防洪限制"], None, False),  # 水位类需 LLM 细判
+    # ---- 通用蓄水/用水规则 ----
+    (["蓄水量", "蓄水变量"], "RESERVOIR_STORAGE", True),
+    (["地下水埋深", "埋深"], "GROUNDWATER_DEPTH", True),
+    (["流域面积", "控制面积", "集水面积"], "BASIN_AREA", False),
     (["面积"], "HAS_AREA", False),
     (["长度", "全长"], "RIVER_LENGTH", False),
     (["水质", "水质类别"], "WATER_QUALITY", False),
     (["发电", "出力", "装机"], "POWER_GENERATION", False),
     (["生态", "环境"], "ECOLOGICAL_FLOW", False),
     (["改为", "更名为", "改名"], "STATION_RENAMED_TO", False),
-    (["属于", "所属"], "BELONGS_TO", False),
+    (["属于", "所属", "所在地区"], "BELONGS_TO", False),
+    (["岸所属行政区", "左岸", "右岸", "南岸", "北岸"], "BELONGS_TO", False),
     (["水文站包括", "水文站为"], "HAS_STATION", False),
     (["包括", "包含", "划分为"], "INCLUDES", False),
     (["比较", "对比", "变化", "增幅", "减少", "偏少", "增加了"], "COMPARISON", True),
@@ -305,6 +326,11 @@ class TripletNormalizer:
 
     def _normalize_one(self, triplet: Dict) -> List[Dict]:
         """规范化单条三元组，可能返回多条（拆分后）"""
+        # 如果已经规范化过（含 subject_type + relation_id 键），直接返回，
+        # 避免二次调用时 confidence 被重复相乘
+        if "relation_id" in triplet and "subject_type" in triplet:
+            return [triplet]
+
         # Step 1: 实体标准化
         subj_info = self._normalize_entity(triplet.get("subject", ""))
         obj_info = self._normalize_object_entity(triplet.get("object", ""))

@@ -93,5 +93,17 @@
       "year": "年份",
       "type": "文档类型（公报/规程/规划）"
     }
+  },
+  "Hydropower_stations":{
+    "description":"",
+    "label":"HydropowerStation",
+    "properties":{
+      "name": "水电站名称",
+      "alias": "别名",
+      "river": "所在河流",
+      "location": "地理位置",
+      "total_capacity": "总库容（亿立方米）",
+      "installed capacity":"装机容量（万千瓦）"
+    }
   }
 }
