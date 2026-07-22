@@ -226,20 +226,17 @@ class OptimizationFormatter:
 
         Args:
             batch_data: get_formulation_batch() 的返回值
-            year: 可选，过滤时间序列
+            year: 可选，控制是否包含时间序列数据（非None时包含）
 
         Returns:
-            {"variables": [...], "constraints": [...], "time_series": {...}, "objective_hints": [...]}
+            {"variables": [...], "constraints": [...], "time_series": {...}, "objective_hints": [...], "meta": {...}}
         """
         reservoir_ids = list(batch_data.get("reservoirs", {}).keys())
         all_variables = []
         all_constraints = []
         all_time_series = {}
         all_objective_hints = set()
-        reservoir_map = {}  # index -> reservoir_id
-
         for idx, rid in enumerate(reservoir_ids):
-            reservoir_map[idx] = rid
             raw = batch_data["reservoirs"][rid]
             reservoir = raw.get("reservoir", {}) or {"id": rid, "name": rid}
 
@@ -261,20 +258,26 @@ class OptimizationFormatter:
                     "unit": var.get("unit", ""),
                 })
 
-            # 约束 → 替换变量名为带 index 的符号
+            # 约束 → 用类别映射符号并加 index 后缀，生成新表达式
+            CATEGORY_TO_SYMBOL = {
+                "water_level": "Z", "storage": "V", "discharge": "Q_out",
+                "power_output": "P", "power_generation": "E",
+                "water_supply": "W_supply", "water_use": "W_use",
+            }
             for cons in fmt.get("constraints", []):
-                if cons.get("expression"):
-                    expr = cons["expression"]
-                    # 替换变量符号: Z -> Z_1, Q_out -> Q_out_2 等
-                    for var in fmt.get("decision_variables", []):
-                        bare_symbol = var["symbol"]
-                        indexed_symbol = f"{bare_symbol}_{idx + 1}"
-                        expr = expr.replace(bare_symbol, indexed_symbol)
-                    all_constraints.append({
-                        "expression": expr,
-                        "type": cons.get("category", "unknown"),
-                        "description": cons.get("name", ""),
-                    })
+                category = cons.get("category", "unknown")
+                symbol = CATEGORY_TO_SYMBOL.get(category)
+                if symbol and cons.get("operator") and cons.get("value") is not None:
+                    indexed_symbol = f"{symbol}_{idx + 1}"
+                    unit_str = f" {cons.get('unit', '')}" if cons.get("unit") else ""
+                    expr = f"{indexed_symbol} {cons['operator']} {cons['value']}{unit_str}"
+                else:
+                    expr = cons.get("expression", "")  # fallback
+                all_constraints.append({
+                    "expression": expr,
+                    "type": category,
+                    "description": cons.get("name", ""),
+                })
 
             # 目标函数提示
             for obj in fmt.get("objective_candidates", []):
