@@ -9,9 +9,62 @@ from pathlib import Path
 
 import torch
 from datasets import load_dataset
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer
 from transformers import TrainingArguments
 from unsloth import FastLanguageModel
+
+# DataCollatorForCompletionOnlyLM: TRL >= 0.9.0 原生支持，低版本手动实现
+try:
+    from trl import DataCollatorForCompletionOnlyLM
+except ImportError:
+    from dataclasses import dataclass
+    from typing import Any, Dict, List, Union
+
+    @dataclass
+    class DataCollatorForCompletionOnlyLM:
+        """TRL < 0.9.0 兼容实现: 只计算 response 部分的 loss"""
+        response_template: str
+        tokenizer: Any
+
+        def __post_init__(self):
+            self.response_token_ids = self.tokenizer.encode(
+                self.response_template, add_special_tokens=False
+            )
+
+        def __call__(self, examples: List[Union[str, Dict]]) -> Dict:
+            # 提取文本
+            texts = []
+            for ex in examples:
+                if isinstance(ex, dict):
+                    texts.append(ex.get("text", ex.get("input", str(ex))))
+                else:
+                    texts.append(str(ex))
+
+            # Tokenize
+            batch = self.tokenizer(
+                texts, padding=True, truncation=True, return_tensors="pt"
+            )
+
+            # Loss masking: response 之前的所有 token 设为 -100
+            labels = batch["input_ids"].clone()
+
+            for i in range(labels.size(0)):
+                # 在 input_ids 中查找 response_token_ids 的位置
+                seq = labels[i].tolist()
+                resp_start = -1
+                for j in range(len(seq) - len(self.response_token_ids) + 1):
+                    if seq[j:j + len(self.response_token_ids)] == self.response_token_ids:
+                        resp_start = j + len(self.response_token_ids)
+                        break
+
+                if resp_start > 0:
+                    labels[i, :resp_start] = -100  # prompt 部分不算 loss
+                # 如果没找到 response_template，整个序列都不算 loss（安全兜底）
+                elif resp_start == -1:
+                    labels[i, :] = -100
+
+            batch["labels"] = labels
+            return batch
 
 # ============================
 # 1. 参数配置（8GB VRAM）
