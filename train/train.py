@@ -70,7 +70,7 @@ except ImportError:
 # 1. 参数配置（8GB VRAM）
 # ============================
 
-MODEL_NAME = "google/gemma-4-4b-it"
+MODEL_NAME = "../models/gemma-4-E4B-it"
 DATA_PATH = "train_data/triples.jsonl"         # 相对 train/ 目录
 OUTPUT_DIR = "./output/gemma4-hydro-lora"
 MAX_SEQ_LENGTH = 4096
